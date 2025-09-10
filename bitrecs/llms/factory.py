@@ -108,11 +108,12 @@ class ChatGPTInterface:
         self.CHATGPT_API_KEY = os.environ.get("CHATGPT_API_KEY")
         if not self.CHATGPT_API_KEY:            
             raise ValueError("CHATGPT_API_KEY is not set")
+        # Create ChatGPT instance once for speed
+        self.router = ChatGPT(self.CHATGPT_API_KEY, model=self.model, 
+                             system_prompt=self.system_prompt, temp=self.temp)
         
     def query(self, user_prompt) -> str:
-        router = ChatGPT(self.CHATGPT_API_KEY, model=self.model, 
-                         system_prompt=self.system_prompt, temp=self.temp)
-        return router.call_chat_gpt(user_prompt)
+        return self.router.call_chat_gpt(user_prompt)
     
     
 class VllmInterface:

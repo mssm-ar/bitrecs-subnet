@@ -108,26 +108,33 @@ class PromptFactory:
         season = self.season
         persona_data = self.PERSONAS[self.persona]
 
-        # Optimized prompt for speed - much shorter and more direct
-        prompt = f"""Recommend {self.num_recs} {self.engine_mode} products for SKU {self.sku} ({self.sku_info}).
+        # Optimized prompt for quality and speed (reduced from original)
+        prompt = f"""Recommend {self.num_recs} complementary products for {self.sku}.
 
-Persona: {self.persona} - {persona_data['description'][:100]}...
-Season: {season} | Date: {today}
+            Persona: {self.persona} - {persona_data['description']}
+            Values: {', '.join(persona_data['priorities'])}
+            Season: {season}
+            Today's date: {today} 
 
-Cart: {self.cart_json}
+            Query: {self.sku} - {self.sku_info}
+            Cart: {self.cart_json}
+            Products: {self.context}
 
-Products:
-{self.context}
+            Current cart: {self.cart_json}
+            Available products: {self.context}
 
-Rules:
-- Return JSON array only
-- Each item: {{"sku": "...", "name": "...", "price": "...", "reason": "..."}}
-- Must exist in products list
-- No duplicates or cart items
-- Match gender if applicable
-- Order by relevance
+            # INPUT
+            Query SKU: <sku>{self.sku}</sku><sku_info>{self.sku_info}</sku_info>
 
-Example: [{{"sku": "ABC", "name": "Product Name", "price": "99", "reason": "complements the main product well"}}]"""
+            Critical Rules:
+            - JSON array only, exactly {self.num_recs} items
+            - NO duplicates, NO {self.sku} in results
+            - Each: {{"sku": "...", "name": "...", "price": "...", "reason": "..."}}
+            - Match gender if applicable, avoid mixing gendered products
+            - Order by relevance, first item is top recommendation
+            - Reason: single sentence, plain words, no punctuation
+
+            Example: [{{"sku": "XYZ", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "complements query product perfectly"}}]"""
 
         prompt_length = len(prompt)
         bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
