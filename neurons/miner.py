@@ -85,12 +85,12 @@ async def do_work(user_prompt: str,
                             profile=profile)
     prompt = factory.generate_prompt()
     try:
-        # Optimized system prompt to prevent duplicates and improve quality
-        optimized_system_prompt = "You are an expert product recommendation assistant. Select DIFFERENT complementary products with detailed names and compelling reasons. Return JSON only."
+        # Balanced system prompt for quality and speed
+        optimized_system_prompt = "You are a product recommendation assistant. Return JSON only."
         llm_response = LLMFactory.query_llm(server=server, 
                                             model=model, 
                                             system_prompt=optimized_system_prompt, 
-                                            temp=0.0, user_prompt=prompt)  # Balanced temp for quality and diversity
+                                            temp=0.0, user_prompt=prompt)  # Zero temp for maximum speed
         if not llm_response or len(llm_response) < 10:
             bt.logging.error("LLM response is empty.")
             return []

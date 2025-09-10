@@ -108,33 +108,27 @@ class PromptFactory:
         season = self.season
         persona_data = self.PERSONAS[self.persona]
 
-        # Optimized prompt for quality and speed (reduced from original)
+        # Optimized prompt for quality and speed
         prompt = f"""Recommend {self.num_recs} complementary products for {self.sku}.
 
-            Persona: {self.persona} - {persona_data['description']}
-            Values: {', '.join(persona_data['priorities'])}
-            Season: {season}
-            Today's date: {today} 
+Persona: {self.persona} - {persona_data['description']}
+Values: {', '.join(persona_data['priorities'])}
+Season: {season}
+Today: {today}
 
-            Query: {self.sku} - {self.sku_info}
-            Cart: {self.cart_json}
-            Products: {self.context}
+Query: {self.sku} - {self.sku_info}
+Cart: {self.cart_json}
+Products: {self.context}
 
-            Current cart: {self.cart_json}
-            Available products: {self.context}
+Critical Rules:
+- JSON array only, exactly {self.num_recs} items
+- NO duplicates, NO {self.sku} in results
+- Each: {{"sku": "...", "name": "...", "price": "...", "reason": "..."}}
+- Match gender if applicable, avoid mixing gendered products
+- Order by relevance, first item is top recommendation
+- Reason: single sentence, plain words, no punctuation
 
-            # INPUT
-            Query SKU: <sku>{self.sku}</sku><sku_info>{self.sku_info}</sku_info>
-
-            Critical Rules:
-            - JSON array only, exactly {self.num_recs} items
-            - NO duplicates, NO {self.sku} in results
-            - Each: {{"sku": "...", "name": "...", "price": "...", "reason": "..."}}
-            - Match gender if applicable, avoid mixing gendered products
-            - Order by relevance, first item is top recommendation
-            - Reason: single sentence, plain words, no punctuation
-
-            Example: [{{"sku": "XYZ", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "complements query product perfectly"}}]"""
+Example: [{{"sku": "XYZ", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "complements query product perfectly"}}]"""
 
         prompt_length = len(prompt)
         bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
