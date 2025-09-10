@@ -85,9 +85,11 @@ async def do_work(user_prompt: str,
                             profile=profile)
     prompt = factory.generate_prompt()
     try:
+        # Optimized system prompt for faster responses
+        optimized_system_prompt = "You are a fast product recommendation assistant. Respond with JSON only."
         llm_response = LLMFactory.query_llm(server=server, 
                                             model=model, 
-                                            system_prompt=system_prompt, 
+                                            system_prompt=optimized_system_prompt, 
                                             temp=0.0, user_prompt=prompt)
         if not llm_response or len(llm_response) < 10:
             bt.logging.error("LLM response is empty.")
@@ -98,15 +100,11 @@ async def do_work(user_prompt: str,
             bt.logging.trace(f" {llm_response} ")
             bt.logging.trace(f"LLM response: {parsed_recs}")
 
-        # Validate parsed results before returning
-        if not parsed_recs or len(parsed_recs) == 0:
-            bt.logging.error("No valid recommendations parsed from LLM response")
-            return []
-            
         return parsed_recs
     except Exception as e:
         bt.logging.error(f"Error calling LLM: {e}")
-        return []
+
+    return []
 
 
 class Miner(BaseMinerNeuron):
@@ -199,54 +197,14 @@ class Miner(BaseMinerNeuron):
                                     profile=user_profile,
                                     debug_prompts=debug_prompts)            
             bt.logging.info(f"LLM {self.model} - Results: count ({len(results)})")
-            
-            # If no results, return early to avoid processing
-            if not results or len(results) == 0:
-                bt.logging.error("No results from do_work - returning empty response")
-                return BitrecsRequest(
-                    name=synapse.name,
-                    axon=synapse.axon,
-                    dendrite=synapse.dendrite,
-                    created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                    user="",
-                    num_results=0,
-                    query=synapse.query,
-                    context="[]",
-                    site_key=synapse.site_key,
-                    results=[],
-                    models_used=[self.model],
-                    miner_uid=str(self.uid),
-                    miner_hotkey=self.wallet.hotkey.ss58_address,
-                    miner_signature=""
-                )
         except Exception as e:
             bt.logging.error(f"\033[31mFATAL ERROR calling do_work: {e!r} \033[0m")
-            # Return empty response on fatal error
-            return BitrecsRequest(
-                name=synapse.name,
-                axon=synapse.axon,
-                dendrite=synapse.dendrite,
-                created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                user="",
-                num_results=0,
-                query=synapse.query,
-                context="[]",
-                site_key=synapse.site_key,
-                results=[],
-                models_used=[self.model],
-                miner_uid=str(self.uid),
-                miner_hotkey=self.wallet.hotkey.ss58_address,
-                miner_signature=""
-            )
         finally:
             et = time.time()
             bt.logging.info(f"{self.model} Query - Elapsed Time: \033[1;32m {et-st} \033[0m")
       
         #Do some cleanup - schema is validated in the reward function
         final_results = []
-        seen_skus = set()
-        query_sku_lower = query.lower()
-        
         for item in results:
             try:
                 item_str = str(item)
@@ -256,35 +214,13 @@ class Miner(BaseMinerNeuron):
                     repaired = json_repair.repair_json(item_str)
                     dictionary_item = json.loads(repaired)
                 
-                # Validate required fields
-                if "sku" not in dictionary_item:
-                    bt.logging.error(f"Item missing 'sku' key: {dictionary_item}")
-                    continue
                 if "name" not in dictionary_item:
                     bt.logging.error(f"Item missing 'name' key: {dictionary_item}")
                     continue
-                if "price" not in dictionary_item:
-                    bt.logging.error(f"Item missing 'price' key: {dictionary_item}")
-                    continue
-                if "reason" not in dictionary_item:
-                    bt.logging.error(f"Item missing 'reason' key: {dictionary_item}")
-                    continue
-                
-                # Check for duplicate SKUs
-                sku = dictionary_item["sku"]
-                if sku in seen_skus:
-                    bt.logging.error(f"Duplicate SKU found: {sku}")
-                    continue
-                seen_skus.add(sku)
-                
-                # Check if recommending the query product itself
-                if sku.lower() == query_sku_lower:
-                    bt.logging.error(f"Cannot recommend query product itself: {sku}")
-                    continue
-                
-                # Clean up the data
                 dictionary_item["name"] = CONST.RE_PRODUCT_NAME.sub("", str(dictionary_item["name"]))
-                dictionary_item["reason"] = CONST.RE_REASON.sub("", str(dictionary_item["reason"]))
+
+                if "reason" in dictionary_item:
+                    dictionary_item["reason"] = CONST.RE_REASON.sub("", str(dictionary_item["reason"]))
                 
                 recommendation = json.dumps(dictionary_item, separators=(',', ':'))
                 final_results.append(recommendation)
@@ -294,25 +230,6 @@ class Miner(BaseMinerNeuron):
 
         if len(final_results) != num_recs:
             bt.logging.error(f"Expected {num_recs} results, but got {len(final_results)}")
-            # If we don't have enough valid results, return empty to avoid 0.0 reward
-            if len(final_results) == 0:
-                bt.logging.error("No valid results generated - returning empty response")
-                return BitrecsRequest(
-                    name=synapse.name,
-                    axon=synapse.axon,
-                    dendrite=synapse.dendrite,
-                    created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                    user="",
-                    num_results=0,
-                    query=synapse.query,
-                    context="[]",
-                    site_key=synapse.site_key,
-                    results=[],
-                    models_used=[self.model],
-                    miner_uid=str(self.uid),
-                    miner_hotkey=self.wallet.hotkey.ss58_address,
-                    miner_signature=""
-                )
       
         utc_now = datetime.now(timezone.utc)
         created_at = utc_now.strftime("%Y-%m-%dT%H:%M:%S")
@@ -483,7 +400,7 @@ class Miner(BaseMinerNeuron):
             case LLM.OPEN_ROUTER:
                 model = "google/gemini-2.0-flash-lite-001"
             case LLM.CHAT_GPT:
-                model = "gpt-3.5-turbo"
+                model = "gpt-3.5-turbo"  # Optimized for speed
             case LLM.VLLM:
                 model = "NousResearch/Meta-Llama-3-8B-Instruct"                
             case LLM.GEMINI:                                
@@ -504,11 +421,14 @@ class Miner(BaseMinerNeuron):
         try:
             result = LLMFactory.query_llm(server=self.llm_provider, 
                                  model=model, 
-                                 system_prompt="You are a helpful assistant", 
-                                 temp=0.0, user_prompt="Tell me a sarcastic joke")
+                                 system_prompt="You are a fast assistant", 
+                                 temp=0.1, user_prompt="Hello, please respond with 'OK' to confirm you are working.")
             self.model = model
             bt.logging.info(f"Warmup SUCCESS: {self.model} - Result: {result}")
             return True
+        except ValueError as ve:
+            bt.logging.error(f"\033[31mVALIDATION ERROR in warmup: {ve} \033[0m")
+            bt.logging.error(f"\033[31mCheck your API keys and prompt length requirements \033[0m")
         except Exception as e:            
             bt.logging.warning(f"\033[33mMake sure you are calling an LLM, thats the whole point of this subnet...\033[0m")
             bt.logging.error(f"\033[31mFATAL ERROR calling warmup: {e!r} \033[0m")

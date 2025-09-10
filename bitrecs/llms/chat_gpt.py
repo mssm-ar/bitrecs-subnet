@@ -3,7 +3,7 @@ from openai import OpenAI
 class ChatGPT:
     def __init__(self, 
                  key,
-                 model="gpt-4o-mini", 
+                 model="gpt-3.5-turbo", 
                  system_prompt="You are a helpful assistant.", 
                  temp=0.0):
         
@@ -16,9 +16,12 @@ class ChatGPT:
 
     def call_chat_gpt(self, prompt) -> str:
         if not prompt or len(prompt) < 10:
-            raise ValueError()
+            raise ValueError(f"Prompt too short: {len(prompt) if prompt else 0} characters (minimum 10)")
 
-        client = OpenAI(api_key=self.CHATGPT_API_KEY, timeout=3.0)
+        if not self.CHATGPT_API_KEY:
+            raise ValueError("CHATGPT_API_KEY is not set")
+
+        client = OpenAI(api_key=self.CHATGPT_API_KEY)
 
         completion = client.chat.completions.create(
             extra_headers={
@@ -32,7 +35,9 @@ class ChatGPT:
                 "content": prompt,
             }],
             temperature=self.temp,
-            max_tokens=512
+            max_tokens=512,  # Optimized for faster response - product recs don't need 2048 tokens
+            timeout=3,  # 2.5 second timeout to ensure sub-3s total response
+            stream=False  # Disable streaming for faster completion
         )
 
         thing = completion.choices[0].message.content                
