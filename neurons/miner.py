@@ -85,20 +85,25 @@ async def do_work(user_prompt: str,
                             profile=profile)
     prompt = factory.generate_prompt()
     try:
-        # Balanced system prompt for quality and speed
-        optimized_system_prompt = "You are a product recommendation assistant. Return JSON only."
+        # JSON-focused system prompt for reliable parsing
+        optimized_system_prompt = "You are a product recommendation assistant. You MUST respond with valid JSON array only. No explanations, no text outside JSON."
         llm_response = LLMFactory.query_llm(server=server, 
                                             model=model, 
                                             system_prompt=optimized_system_prompt, 
-                                            temp=0.0, user_prompt=prompt)  # Zero temp for maximum speed
+                                            temp=0.03, user_prompt=prompt)  # Set to 0.03 as requested
         if not llm_response or len(llm_response) < 10:
             bt.logging.error("LLM response is empty.")
             return []
         
+        # Log raw LLM response for debugging
+        bt.logging.info(f"Raw LLM Response: {llm_response[:200]}...")
+        
         parsed_recs = PromptFactory.tryparse_llm(llm_response)
+        bt.logging.info(f"Parsed recommendations: {len(parsed_recs)} items")
+        
         if debug_prompts:
-            bt.logging.trace(f" {llm_response} ")
-            bt.logging.trace(f"LLM response: {parsed_recs}")
+            bt.logging.trace(f"Full LLM response: {llm_response}")
+            bt.logging.trace(f"Parsed results: {parsed_recs}")
 
         # Validate parsed results before returning
         if not parsed_recs or len(parsed_recs) == 0:
@@ -338,7 +343,6 @@ class Miner(BaseMinerNeuron):
         
         # Ensure proper response format to avoid zero rewards
         output_synapse=BitrecsRequest(
-            name=synapse.name,
             axon=synapse.axon,
             dendrite=synapse.dendrite,
             created_at=created_at,

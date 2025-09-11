@@ -41,7 +41,7 @@ ROOT_DIR = Path(bitrecs.__file__).parent.parent
 SCHEMA_UPDATE_CUTOFF = datetime(2025, 7, 28, tzinfo=timezone.utc)
 EPOCH_TEMPO = 360
 TEMPO_SYNC_INTERVAL = 120
-MAX_DENDRITE_TIMEOUT = 3  # Reduced for faster response times
+MAX_DENDRITE_TIMEOUT = 5  # Reduced for faster response times
 MIN_QUERY_LENGTH = 3
 MAX_QUERY_LENGTH = 40
 MIN_RECS_PER_REQUEST = 1

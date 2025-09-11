@@ -30,11 +30,11 @@ class ChatGPT:
                 "role": "user",
                 "content": prompt,
             }],
-            temperature=self.temp,
-            max_tokens=512,  # Increased for better quality responses
-            timeout=3.0,  # Keep timeout for speed
+            temperature=0.03,  # Set to 0.03 as requested
+            max_tokens=512,  # Set to 512 as requested
+            timeout=5.0,  # Keep timeout for speed
             stream=False,  # Disable streaming for faster completion
-            top_p=0.3,  # Increased for better creativity and diversity
+            top_p=0.1,  # Reduced for more focused responses
             frequency_penalty=0.0,  # No frequency penalty
             presence_penalty=0.0  # No presence penalty
         )

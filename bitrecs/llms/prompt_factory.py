@@ -107,35 +107,61 @@ class PromptFactory:
         today = datetime.now().strftime("%Y-%m-%d")
         season = self.season
         persona_data = self.PERSONAS[self.persona]
+        
+        # Validate persona data structure
+        if not persona_data or 'priorities' not in persona_data or 'description' not in persona_data:
+            bt.logging.error(f"Invalid persona data for {self.persona}: {persona_data}")
+            # Fallback to default persona
+            persona_data = self.PERSONAS["ecommerce_retail_store_manager"]
 
-        # Optimized prompt for quality and speed
-        prompt = f"""Recommend {self.num_recs} complementary products for {self.sku}.
+        # Ultra-minimal prompt for maximum speed with context truncation
+        # Truncate context to stay within token limits (roughly 1500 chars = ~400 tokens)
+        context_str = str(self.context)
+        if len(context_str) > 1500:  # Reduced limit for enhanced prompt
+            context_str = context_str[:1500] + "..."
+        
+        # Enhanced prompt with persona context while keeping it concise
+        try:
+            persona_priorities = ', '.join(persona_data['priorities'][:3])  # Top 3 priorities only
+        except (KeyError, IndexError, TypeError) as e:
+            bt.logging.error(f"Error extracting persona priorities: {e}")
+            persona_priorities = "quality, value, customer satisfaction"  # Fallback priorities
+        
+        # Add cart context if available (truncated to save tokens)
+        cart_context = ""
+        if hasattr(self, 'cart') and self.cart:
+            cart_items = [item.get('sku', '') for item in self.cart[:3]]  # First 3 items only
+            if cart_items:
+                cart_context = f"\nCustomer Cart: {', '.join(cart_items)}"
+        
+        prompt = f"""You are {persona_data['description']} recommending {self.num_recs} complementary products for {self.sku} in {season}.
 
-Persona: {self.persona} - {persona_data['description']}
-Values: {', '.join(persona_data['priorities'])}
-Season: {season}
-Today: {today}
+            Customer Profile: Values {persona_priorities}{cart_context}
+            Available Products: {context_str}
 
-Query: {self.sku} - {self.sku_info}
-Cart: {self.cart_json}
-Products: {self.context}
+            CRITICAL RULES:
+            - Return JSON array only, exactly {self.num_recs} items
+            - NO duplicates, NO {self.sku} in results
+            - Exact recommendation number
+            - The response should not be malformed
+            - Return items MUST exist in context.
+            - Return items must NOT exist in the cart.
+            - Each item: {{"sku": "...", "name": "Full Product Name - Category|Subcategory", "price": "...", "reason": "Detailed reason why this complements the query product"}}
 
-Critical Rules:
-- JSON array only, exactly {self.num_recs} items
-- NO duplicates, NO {self.sku} in results
-- Each: {{"sku": "...", "name": "...", "price": "...", "reason": "..."}}
-- Match gender if applicable, avoid mixing gendered products
-- Order by relevance, first item is top recommendation
-- Reason: single sentence, plain words, no punctuation
+            Output requirements:
+            - Each item must be valid JSON with: "sku": "...", "name": "...", "price": "...", "reason": "..."
+            - Please consider gender of Query SKU when recommending products.
 
-Example: [{{"sku": "XYZ", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "complements query product perfectly"}}]"""
+            Example: [{{"sku": "ABC", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "This product perfectly complements because it provides..."}}]"""
 
         prompt_length = len(prompt)
         bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
         
+        # Always calculate and log token count for monitoring
+        token_count = PromptFactory.get_token_count(prompt)
+        bt.logging.info(f"LLM QUERY Prompt Token count: {token_count}")
+        
         if self.debug:
-            token_count = PromptFactory.get_token_count(prompt)
-            bt.logging.info(f"LLM QUERY Prompt Token count: {token_count}")
             bt.logging.debug(f"Persona: {self.persona}")
             bt.logging.debug(f"Season {season}")
             bt.logging.debug(f"Values: {', '.join(persona_data['priorities'])}")
@@ -173,18 +199,47 @@ Example: [{{"sku": "XYZ", "name": "Product Name - Category|Subcategory", "price"
             if not input_str:
                 bt.logging.error("Empty input string tryparse_llm")   
                 return []
+            
+            # Clean up the input string
             input_str = input_str.replace("```json", "").replace("```", "").strip()
+            
+            # Try direct JSON parsing first
+            try:
+                result = json.loads(input_str)
+                if isinstance(result, list):
+                    bt.logging.info(f"Direct JSON parsing successful: {len(result)} items")
+                    return result
+            except json.JSONDecodeError:
+                pass
+            
+            # Try to find JSON array pattern
             pattern = r'\[.*?\]'
             regex = re.compile(pattern, re.DOTALL)
-            match = regex.findall(input_str)        
-            for array in match:
+            matches = regex.findall(input_str)
+            
+            for array in matches:
                 try:
                     llm_result = array.strip()
-                    return json.loads(llm_result)
+                    result = json.loads(llm_result)
+                    if isinstance(result, list):
+                        bt.logging.info(f"Pattern JSON parsing successful: {len(result)} items")
+                        return result
                 except json.JSONDecodeError:                    
-                    bt.logging.error(f"Invalid JSON in prompt factory: {array}")
+                    bt.logging.error(f"Invalid JSON in prompt factory: {array[:100]}...")
+            
+            # Try json_repair as last resort
+            try:
+                repaired = json_repair.repair_json(input_str)
+                result = json.loads(repaired)
+                if isinstance(result, list):
+                    bt.logging.info(f"JSON repair successful: {len(result)} items")
+                    return result
+            except Exception as repair_error:
+                bt.logging.error(f"JSON repair failed: {repair_error}")
+            
+            bt.logging.error(f"No valid JSON array found in: {input_str[:200]}...")
             return []
         except Exception as e:
-            bt.logging.error(str(e))
+            bt.logging.error(f"tryparse_llm error: {str(e)}")
             return []
     
