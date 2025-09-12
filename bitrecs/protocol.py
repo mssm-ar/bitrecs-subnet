@@ -21,6 +21,7 @@ import pydantic
 import bittensor as bt
 
 class BitrecsRequest(bt.Synapse):
+    name: str = "BitrecsRequest"
     created_at: str | None
     user: str | None
     num_results: int = pydantic.Field(
@@ -42,6 +43,7 @@ class BitrecsRequest(bt.Synapse):
 
     def to_dict(self) -> dict:
         return {
+            'name': self.name,
             'created_at': self.created_at,
             'user': self.user,
             'num_results': self.num_results,

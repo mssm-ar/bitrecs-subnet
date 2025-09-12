@@ -90,7 +90,7 @@ async def do_work(user_prompt: str,
         llm_response = LLMFactory.query_llm(server=server, 
                                             model=model, 
                                             system_prompt=optimized_system_prompt, 
-                                            temp=0.03, user_prompt=prompt)  # Set to 0.03 as requested
+                                            temp=0.0, user_prompt=prompt)  # Set to 0.03 as requested
         if not llm_response or len(llm_response) < 10:
             bt.logging.error("LLM response is empty.")
             return []
@@ -345,6 +345,7 @@ class Miner(BaseMinerNeuron):
         output_synapse=BitrecsRequest(
             axon=synapse.axon,
             dendrite=synapse.dendrite,
+            name="BitrecsRequest",  # Must be set to match protocol
             created_at=created_at,
             user="",  # Must be empty string
             num_results=num_recs,  # Must match requested number

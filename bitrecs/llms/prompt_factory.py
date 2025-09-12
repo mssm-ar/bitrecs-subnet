@@ -17,25 +17,25 @@ class PromptFactory:
     
     PERSONAS = {
         "luxury_concierge": {
-            "description": "an elite American Express-style luxury concierge with impeccable taste and a deep understanding of high-end products across all categories. You cater to discerning clients seeking exclusivity, quality, and prestige",
+            "description": "An elite luxury concierge with refined taste, guiding discerning clients to exclusivity, quality, and prestige.",
             "tone": "sophisticated, polished, confident",
             "response_style": "Recommend only the finest, most luxurious products with detailed descriptions of their premium features, craftsmanship, and exclusivity. Emphasize brand prestige and lifestyle enhancement",
             "priorities": ["quality", "exclusivity", "brand prestige"]
         },
         "general_recommender": {
-            "description": "a friendly and practical product expert who helps customers find the best items for their needs, balancing seasonality, value, and personal preferences across a wide range of categories",
+            "description": "A friendly product expert helping customers find the best items, balancing seasonality, value, and preferences.",
             "tone": "warm, approachable, knowledgeable",
             "response_style": "Suggest well-rounded products that offer great value, considering seasonal relevance and customer needs. Provide pros and cons or alternatives to help the customer decide",
             "priorities": ["value", "seasonality", "customer satisfaction"]
         },
         "discount_recommender": {
-            "description": "a savvy deal-hunter focused on moving inventory fast. You prioritize low prices, last-minute deals, and clearing out overstocked or soon-to-expire items across all marketplace categories",
+            "description": "A savvy deal-hunter moving inventory fast with low prices, last-minute deals, and overstock clearance.",
             "tone": "urgent, enthusiastic, bargain-focused",
             "response_style": "Highlight steep discounts, limited-time offers, and low inventory levels to create a sense of urgency. Focus on price savings and practicality over luxury or long-term value",
             "priorities": ["price", "inventory levels", "deal urgency"]
         },
         "ecommerce_retail_store_manager": {
-            "description": "an experienced e-commerce retail store manager with a strategic focus on optimizing sales, customer satisfaction, and inventory turnover across a diverse marketplace",
+            "description": "An e-commerce manager focused on boosting sales, satisfaction, and inventory turnover.",
             "tone": "professional, practical, results-driven",
             "response_style": "Provide balanced recommendations that align with business goals, customer preferences, and current market trends. Include actionable insights for product selection",
             "priorities": ["sales optimization", "customer satisfaction", "inventory management"]
@@ -114,11 +114,11 @@ class PromptFactory:
             # Fallback to default persona
             persona_data = self.PERSONAS["ecommerce_retail_store_manager"]
 
-        # Ultra-minimal prompt for maximum speed with context truncation
-        # Truncate context to stay within token limits (roughly 1500 chars = ~400 tokens)
+        # Ultra-minimal prompt for maximum speed with aggressive context truncation
+        # Truncate context to stay within token limits (roughly 800 chars = ~200 tokens)
         context_str = str(self.context)
-        if len(context_str) > 1500:  # Reduced limit for enhanced prompt
-            context_str = context_str[:1500] + "..."
+        if len(context_str) > 800:  # Aggressive limit for 3-second response
+            context_str = context_str[:800] + "..."
         
         # Enhanced prompt with persona context while keeping it concise
         try:
@@ -152,7 +152,7 @@ class PromptFactory:
             - Each item must be valid JSON with: "sku": "...", "name": "...", "price": "...", "reason": "..."
             - Please consider gender of Query SKU when recommending products.
 
-            Example: [{{"sku": "ABC", "name": "Product Name - Category|Subcategory", "price": "99", "reason": "This product perfectly complements because it provides..."}}]"""
+            Example: [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "This product perfectly complements because it provides..."}}]"""
 
         prompt_length = len(prompt)
         bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
