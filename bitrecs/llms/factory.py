@@ -108,7 +108,7 @@ class ChatGPTInterface:
         self.CHATGPT_API_KEY = os.environ.get("CHATGPT_API_KEY")
         if not self.CHATGPT_API_KEY:            
             raise ValueError("CHATGPT_API_KEY is not set")
-        # Create ChatGPT instance once for speed
+        # Create ChatGPT instance once for speed and connection reuse
         self.router = ChatGPT(self.CHATGPT_API_KEY, model=self.model, 
                              system_prompt=self.system_prompt, temp=self.temp)
         

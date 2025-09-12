@@ -78,6 +78,19 @@ async def do_work(user_prompt: str,
     bt.logging.info(f"do_work LLM model: {model}")  
     bt.logging.trace(f"do_work profile: {profile}")
 
+    # Get persona for caching
+    persona = "ecommerce_retail_store_manager"
+    if profile:
+        persona = profile.site_config.get("profile", "ecommerce_retail_store_manager")
+
+    # Try to get cached or pre-computed response first (FASTEST)
+    cached_response = PromptFactory.get_cached_or_precomputed_response(
+        user_prompt, context, num_recs, persona
+    )
+    if cached_response:
+        bt.logging.info(f"⚡ SPEED BOOST: Using cached/precomputed response - {len(cached_response)} items")
+        return cached_response
+
     factory = PromptFactory(sku=user_prompt,
                             context=context, 
                             num_recs=num_recs,                                                         
@@ -120,6 +133,10 @@ async def do_work(user_prompt: str,
                 # Pad with empty recommendations if needed
                 while len(parsed_recs) < num_recs:
                     parsed_recs.append({"sku": "", "name": "", "price": "", "reason": ""})
+
+        # Cache the successful response for future use
+        if len(parsed_recs) >= num_recs:
+            PromptFactory.store_response_in_cache(user_prompt, context, num_recs, persona, parsed_recs)
 
         return parsed_recs
     except Exception as e:
@@ -241,65 +258,50 @@ class Miner(BaseMinerNeuron):
             else:
                 bt.logging.error(f"❌ RESPONSE TIME VALIDATION: {elapsed_time:.3f}s < {r_limit}s - FAILED (ZERO REWARD)")
       
-        # Enhanced cleanup with strict validation to avoid zero rewards
+        # Optimized cleanup with fast validation
         final_results = []
         seen_skus = set()
         query_sku_lower = query.lower().strip()
         
         for item in results:
             try:
-                item_str = str(item)
-                try:
-                    dictionary_item = json.loads(item_str)
-                except json.JSONDecodeError:
-                    repaired = json_repair.repair_json(item_str)
-                    dictionary_item = json.loads(repaired)
+                # Fast JSON parsing - try direct first
+                if isinstance(item, dict):
+                    dictionary_item = item
+                else:
+                    item_str = str(item)
+                    try:
+                        dictionary_item = json.loads(item_str)
+                    except json.JSONDecodeError:
+                        repaired = json_repair.repair_json(item_str)
+                        dictionary_item = json.loads(repaired)
                 
-                # Validate required fields exist
-                required_fields = ["sku", "name", "price", "reason"]
-                if not all(field in dictionary_item for field in required_fields):
-                    bt.logging.error(f"❌ JSON SCHEMA VALIDATION: Item missing required fields: {dictionary_item}")
-                    continue
+                # Fast validation - check only essential fields
+                sku = dictionary_item.get("sku", "")
+                name = dictionary_item.get("name", "")
+                price = dictionary_item.get("price", "")
+                reason = dictionary_item.get("reason", "")
                 
-                # Validate field types
-                if not isinstance(dictionary_item["sku"], str) or not dictionary_item["sku"].strip():
-                    bt.logging.error(f"Invalid SKU: {dictionary_item['sku']}")
-                    continue
-                if not isinstance(dictionary_item["name"], str) or not dictionary_item["name"].strip():
-                    bt.logging.error(f"Invalid name: {dictionary_item['name']}")
-                    continue
-                if not isinstance(dictionary_item["price"], (str, int, float)):
-                    bt.logging.error(f"Invalid price: {dictionary_item['price']}")
-                    continue
-                if not isinstance(dictionary_item["reason"], str) or not dictionary_item["reason"].strip():
-                    bt.logging.error(f"Invalid reason: {dictionary_item['reason']}")
+                # Quick validation
+                if not sku or not name or not price or not reason:
                     continue
                 
-                # Check for query SKU in results (causes zero reward)
-                sku_lower = dictionary_item["sku"].lower().strip()
-                if sku_lower == query_sku_lower:
-                    bt.logging.error(f"❌ QUERY PRODUCT VALIDATION: Query SKU found in results: {dictionary_item['sku']}")
+                # Check for query SKU and duplicates (fastest checks first)
+                sku_lower = sku.lower().strip()
+                if sku_lower == query_sku_lower or sku_lower in seen_skus:
                     continue
                 
-                # Check for duplicates (causes zero reward)
-                if sku_lower in seen_skus:
-                    bt.logging.error(f"❌ DUPLICATE VALIDATION: Duplicate SKU found: {dictionary_item['sku']}")
-                    continue
-                
-                # Clean and validate data
-                dictionary_item["name"] = CONST.RE_PRODUCT_NAME.sub("", str(dictionary_item["name"]))
-                dictionary_item["reason"] = CONST.RE_REASON.sub("", str(dictionary_item["reason"]))
-                
-                # Ensure price is string for consistency
-                dictionary_item["price"] = str(dictionary_item["price"])
+                # Fast data cleaning
+                dictionary_item["name"] = CONST.RE_PRODUCT_NAME.sub("", str(name))
+                dictionary_item["reason"] = CONST.RE_REASON.sub("", str(reason))
+                dictionary_item["price"] = str(price)
                 
                 seen_skus.add(sku_lower)
                 recommendation = json.dumps(dictionary_item, separators=(',', ':'))
                 final_results.append(recommendation)
                 
-            except Exception as e:
-                bt.logging.error(f"Failed to parse LLM result: {item}, error: {e}")
-                continue
+            except Exception:
+                continue  # Skip invalid items silently for speed
 
         if len(final_results) != num_recs:
             bt.logging.error(f"❌ COUNT VALIDATION: Expected {num_recs} results, but got {len(final_results)}")
@@ -307,36 +309,18 @@ class Miner(BaseMinerNeuron):
             while len(final_results) < num_recs:
                 final_results.append('{"sku": "", "name": "", "price": "", "reason": ""}')
         
-        # Log comprehensive validation summary
-        bt.logging.info(f"\n🎯 VALIDATION SUMMARY:")
-        bt.logging.info(f"   Response Time: {elapsed_time:.3f}s (Required: >=1.0s)")
-        bt.logging.info(f"   JSON Schema: {'✅ PASSED' if len(final_results) == num_recs else '❌ FAILED'}")
-        bt.logging.info(f"   No Duplicates: {'✅ PASSED' if len(seen_skus) == len(final_results) else '❌ FAILED'}")
-        bt.logging.info(f"   Query Not in Results: {'✅ PASSED' if query_sku_lower not in seen_skus else '❌ FAILED'}")
-        bt.logging.info(f"   Result Count: {len(final_results)}/{num_recs} {'✅ PASSED' if len(final_results) == num_recs else '❌ FAILED'}")
-        
-        # Calculate product diversity (distance validation)
-        unique_skus = len(seen_skus)
-        total_results = len(final_results)
-        diversity_score = unique_skus / total_results if total_results > 0 else 0
-        bt.logging.info(f"   Product Diversity: {unique_skus}/{total_results} ({diversity_score:.2f}) {'✅ PASSED' if diversity_score == 1.0 else '⚠️ PARTIAL'}")
-        
-        # Calculate expected score
-        base_reward = 0.80
+        # Fast validation summary (reduced logging for speed)
         all_validations_passed = (
             elapsed_time >= 1.0 and 
             len(final_results) == num_recs and 
             len(seen_skus) == len(final_results) and 
-            query_sku_lower not in seen_skus and
-            diversity_score == 1.0
+            query_sku_lower not in seen_skus
         )
         
         if all_validations_passed:
-            expected_score = base_reward
-            bt.logging.info(f"🎉 EXPECTED SCORE: {expected_score} (BASE_REWARD)")
+            bt.logging.info(f"✅ VALIDATION: {elapsed_time:.3f}s, {len(final_results)}/{num_recs} results")
         else:
-            expected_score = 0.0
-            bt.logging.error(f"💀 EXPECTED SCORE: {expected_score} (ZERO REWARD)")
+            bt.logging.error(f"❌ VALIDATION FAILED: {elapsed_time:.3f}s, {len(final_results)}/{num_recs} results")
       
         utc_now = datetime.now(timezone.utc)
         created_at = utc_now.strftime("%Y-%m-%dT%H:%M:%S")
@@ -509,7 +493,7 @@ class Miner(BaseMinerNeuron):
             case LLM.OPEN_ROUTER:
                 model = "google/gemini-2.0-flash-lite-001"
             case LLM.CHAT_GPT:
-                model = "gpt-3.5-turbo"  # Optimized for speed
+                model = "gpt-3.5-turbo-106"  # Optimized for speed
             case LLM.VLLM:
                 model = "NousResearch/Meta-Llama-3-8B-Instruct"                
             case LLM.GEMINI:                                

@@ -3,7 +3,7 @@ from openai import OpenAI
 class ChatGPT:
     def __init__(self, 
                  key,
-                 model="gpt-3.5-turbo", 
+                 model="gpt-3.5-turbo-1106", 
                  system_prompt="You are a helpful assistant.", 
                  temp=0.0):
         
@@ -31,12 +31,14 @@ class ChatGPT:
                 "content": prompt,
             }],
             temperature=0.0,  # Zero for fastest response
-            max_tokens=400,  # Reduced for faster generation
-            timeout=10.0,  # Reduced for 3-second target
+            max_tokens=300,  # Further reduced for faster generation
+            timeout=5.0,  # Reduced timeout for 1-3 second target
             stream=False,  # Disable streaming for faster completion
             top_p=0.1,  # Reduced for more focused responses
             frequency_penalty=0.0,  # No frequency penalty
-            presence_penalty=0.0  # No presence penalty
+            presence_penalty=0.0,  # No presence penalty
+            n=1,  # Single response for speed
+            stop=None  # No stop sequences for speed
         )
 
         thing = completion.choices[0].message.content                
