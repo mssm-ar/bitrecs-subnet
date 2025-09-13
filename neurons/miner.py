@@ -84,7 +84,7 @@ async def do_work(user_prompt: str,
         persona = profile.site_config.get("profile", "ecommerce_retail_store_manager")
 
     # Try to get cached or pre-computed response first (FASTEST)
-    cached_response = PromptFactory.get_cached_or_precomputed_response(
+    cached_response = PromptFactory.get_cached_response(
         user_prompt, context, num_recs, persona
     )
     if cached_response:
@@ -215,6 +215,7 @@ class Miner(BaseMinerNeuron):
 
         """
         bt.logging.info(f"MINER {self.uid} FORWARD PASS {synapse.query}")
+        # bt.logging.trace(f"Full synapse data: {synapse}")
 
         results = []
         query = synapse.query

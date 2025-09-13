@@ -22,24 +22,6 @@ class PromptFactory:
     _cache_timestamps: Dict[str, float] = {}
     CACHE_TTL = 300  # 5 minutes
     
-    # Pre-computed responses for common queries
-    PRECOMPUTED_RESPONSES = {
-        "electronics": [
-            {"sku": "WIRELESS-HEADPHONES", "name": "Wireless Bluetooth Headphones", "price": "99", "reason": "Perfect companion for your device"},
-            {"sku": "PHONE-CASE", "name": "Protective Phone Case", "price": "25", "reason": "Essential protection for your phone"},
-            {"sku": "CHARGING-CABLE", "name": "USB-C Charging Cable", "price": "15", "reason": "Fast charging solution"},
-            {"sku": "POWER-BANK", "name": "Portable Power Bank", "price": "45", "reason": "Keep your devices charged on the go"},
-            {"sku": "SCREEN-PROTECTOR", "name": "Tempered Glass Screen Protector", "price": "12", "reason": "Crystal clear protection"}
-        ],
-        "clothing": [
-            {"sku": "BASIC-TEE", "name": "Classic Cotton T-Shirt", "price": "20", "reason": "Essential wardrobe staple"},
-            {"sku": "JEANS", "name": "Comfortable Denim Jeans", "price": "60", "reason": "Versatile and durable"},
-            {"sku": "HOODIE", "name": "Cozy Pullover Hoodie", "price": "45", "reason": "Perfect for layering"},
-            {"sku": "SNEAKERS", "name": "Comfortable Running Shoes", "price": "80", "reason": "Great for daily wear"},
-            {"sku": "JACKET", "name": "Lightweight Jacket", "price": "75", "reason": "Ideal for changing weather"}
-        ]
-    }
-    
     PERSONAS = {
         "luxury_concierge": {
             "description": "Luxury expert focusing on premium quality and exclusivity.",
@@ -140,24 +122,6 @@ class PromptFactory:
         cls._cache_timestamps[cache_key] = time.time()
         bt.logging.info(f"💾 CACHE STORE: Cached response for {cache_key[:20]}...")
     
-    @classmethod
-    def _get_precomputed_response(cls, sku: str, num_recs: int) -> Optional[List]:
-        """Get pre-computed response for common queries"""
-        sku_lower = sku.lower()
-        
-        # Check for electronics category
-        if any(keyword in sku_lower for keyword in ['phone', 'laptop', 'tablet', 'computer', 'electronic', 'tech', 'gadget']):
-            response = cls.PRECOMPUTED_RESPONSES["electronics"][:num_recs]
-            bt.logging.info(f"⚡ PRECOMPUTED: Using electronics response for {sku}")
-            return response
-        
-        # Check for clothing category
-        if any(keyword in sku_lower for keyword in ['shirt', 'pants', 'dress', 'shoes', 'jacket', 'clothing', 'fashion']):
-            response = cls.PRECOMPUTED_RESPONSES["clothing"][:num_recs]
-            bt.logging.info(f"⚡ PRECOMPUTED: Using clothing response for {sku}")
-            return response
-        
-        return None
 
     def _sort_cart_keys(self, cart: List[dict]) -> List[str]:
         ordered_cart = []
@@ -188,8 +152,8 @@ class PromptFactory:
         # Ultra-minimal prompt for 1-3 second response time
         # Aggressive context truncation (500 chars = ~125 tokens max)
         context_str = str(self.context)
-        if len(context_str) > 500:  # Reduced from 800 for faster processing
-            context_str = context_str[:500] + "..."
+        if len(context_str) > 600:  # Reduced from 800 for faster processing
+            context_str = context_str[:600] + "..."
         
         # Simplified persona - only essential info
         try:
@@ -206,13 +170,29 @@ class PromptFactory:
                 cart_context = f"\nCart: {', '.join(cart_items)}"
         
         # Ultra-compact prompt for maximum speed (1-3 seconds)
-        prompt = f"""Recommend {self.num_recs} products for {self.sku} ({season}).
-            Style: {persona_data['description']}
-            Values: {persona_priorities}{cart_context}
-            Products: {context_str}
+        prompt = f"""
+            Recommend {self.num_recs} products for {self.sku} ({season}).  
+            Style: {persona_data['description']}  
+            Values: {persona_priorities}{cart_context}  
+            Products: {context_str}  
 
-            Critical Rules: JSON array, {self.num_recs} items, no {self.sku}, no duplicates, items from context only.
-            Format: [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Why..."}}]\
+            Critical Rules:  
+            - Return only a JSON array, no extra text.  
+            - Exactly {self.num_recs} items, no {self.sku}, no duplicates, from context only.  
+            - Exclude products already in cart.  
+            - Match gender of SKU (neutral → neutral), never mix genders.  
+            - Keep pet and baby products separate.  
+            - Stay within the same product category as the input SKU.
+            - Rank by relevance/profitability.  
+
+            Reason Guidelines:  
+            - Each item must have: "sku", "name", "price", "reason".  
+            - Reason = one short plain sentence, no punctuation/line breaks.  
+            - Vary reasoning styles (Perfect/Ideal/Great choice/etc.).  
+            - Explain specific use case or complementarity. 
+
+            Format:  
+            [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Why it fits"}}]
         """
 
         prompt_length = len(prompt)
@@ -229,17 +209,12 @@ class PromptFactory:
         return prompt
     
     @classmethod
-    def get_cached_or_precomputed_response(cls, sku: str, context: str, num_recs: int, persona: str) -> Optional[List]:
+    def get_cached_response(cls, sku: str, context: str, num_recs: int, persona: str) -> Optional[List]:
         """
-        Get response from cache or pre-computed responses for maximum speed
-        Returns None if no cached/precomputed response available
+        Get response from cache for maximum speed
+        Returns None if no cached response available
         """
-        # Try pre-computed responses first (fastest)
-        precomputed = cls._get_precomputed_response(sku, num_recs)
-        if precomputed:
-            return precomputed
-        
-        # Try cache second
+        # Try cache
         cache_key = cls._get_cache_key(sku, context, num_recs, persona)
         cached = cls._get_cached_response(cache_key)
         if cached:
@@ -274,43 +249,115 @@ class PromptFactory:
     @staticmethod
     def tryparse_llm(input_str: str) -> list:
         """
-        Optimized JSON parsing for speed - try fastest methods first
+        Robust JSON parsing with comprehensive error handling and logging
         """
         if not input_str or len(input_str) < 10:
+            bt.logging.error("Empty or too short LLM response")
             return []
         
-        # Fast cleanup - only essential replacements
-        input_str = input_str.replace("```json", "").replace("```", "").strip()
+        # Log the raw response for debugging
+        bt.logging.info(f"Raw LLM response length: {len(input_str)}")
+        bt.logging.debug(f"Raw LLM response: {input_str[:500]}...")
+        
+        # Enhanced cleanup - remove common LLM artifacts
+        cleaned_input = input_str.replace("```json", "").replace("```", "").strip()
+        cleaned_input = cleaned_input.replace("```", "").strip()
         
         # Method 1: Direct JSON parsing (fastest)
         try:
-            result = json.loads(input_str)
+            result = json.loads(cleaned_input)
             if isinstance(result, list) and len(result) > 0:
+                bt.logging.info(f"Direct JSON parsing successful: {len(result)} items")
                 return result
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            bt.logging.debug(f"Direct JSON parsing failed: {e}")
         
-        # Method 2: Find first JSON array pattern (faster than multiple matches)
-        start = input_str.find('[')
+        # Method 2: Find JSON array pattern with better extraction
+        start = cleaned_input.find('[')
         if start != -1:
-            end = input_str.rfind(']')
+            end = cleaned_input.rfind(']')
             if end > start:
                 try:
-                    json_str = input_str[start:end+1]
+                    json_str = cleaned_input[start:end+1]
                     result = json.loads(json_str)
                     if isinstance(result, list) and len(result) > 0:
+                        bt.logging.info(f"Pattern JSON parsing successful: {len(result)} items")
                         return result
+                except json.JSONDecodeError as e:
+                    bt.logging.debug(f"Pattern JSON parsing failed: {e}")
+        
+        # Method 3: Try to find multiple JSON objects and combine
+        try:
+            # Look for individual JSON objects
+            objects = []
+            current_pos = 0
+            while current_pos < len(cleaned_input):
+                start = cleaned_input.find('{', current_pos)
+                if start == -1:
+                    break
+                end = cleaned_input.find('}', start)
+                if end == -1:
+                    break
+                
+                try:
+                    obj_str = cleaned_input[start:end+1]
+                    obj = json.loads(obj_str)
+                    if isinstance(obj, dict) and 'sku' in obj:
+                        objects.append(obj)
                 except json.JSONDecodeError:
                     pass
+                
+                current_pos = end + 1
+            
+            if len(objects) > 0:
+                bt.logging.info(f"Individual object parsing successful: {len(objects)} items")
+                return objects
+        except Exception as e:
+            bt.logging.debug(f"Individual object parsing failed: {e}")
         
-        # Method 3: JSON repair (slowest - only if needed)
+        # Method 4: JSON repair (last resort)
         try:
-            repaired = json_repair.repair_json(input_str)
+            repaired = json_repair.repair_json(cleaned_input)
             result = json.loads(repaired)
             if isinstance(result, list) and len(result) > 0:
+                bt.logging.info(f"JSON repair successful: {len(result)} items")
                 return result
-        except Exception:
-            pass
+        except Exception as e:
+            bt.logging.debug(f"JSON repair failed: {e}")
         
+        # Method 5: Fallback - try to extract any valid data
+        try:
+            # Look for any text that looks like product data
+            lines = cleaned_input.split('\n')
+            fallback_objects = []
+            
+            for line in lines:
+                if 'sku' in line.lower() and ('name' in line.lower() or 'price' in line.lower()):
+                    # Try to extract basic info
+                    try:
+                        # Simple extraction for emergency cases
+                        sku_match = re.search(r'"sku":\s*"([^"]+)"', line)
+                        name_match = re.search(r'"name":\s*"([^"]+)"', line)
+                        price_match = re.search(r'"price":\s*"([^"]+)"', line)
+                        reason_match = re.search(r'"reason":\s*"([^"]+)"', line)
+                        
+                        if sku_match and name_match:
+                            obj = {
+                                "sku": sku_match.group(1),
+                                "name": name_match.group(1),
+                                "price": price_match.group(1) if price_match else "0",
+                                "reason": reason_match.group(1) if reason_match else "Recommended product"
+                            }
+                            fallback_objects.append(obj)
+                    except Exception:
+                        continue
+            
+            if len(fallback_objects) > 0:
+                bt.logging.warning(f"Fallback parsing successful: {len(fallback_objects)} items")
+                return fallback_objects
+        except Exception as e:
+            bt.logging.debug(f"Fallback parsing failed: {e}")
+        
+        bt.logging.error(f"No valid JSON found in LLM response: {cleaned_input[:200]}...")
         return []
     
