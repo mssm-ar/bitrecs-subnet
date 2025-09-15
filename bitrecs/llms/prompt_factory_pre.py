@@ -23,6 +23,10 @@ class PromptFactory:
     _cache_timestamps: Dict[str, float] = {}
     CACHE_TTL = 300  # 5 minutes
     
+    # Context file cache (static - loaded once)
+    _context_cache: Optional[str] = None
+    _context_loaded: bool = False
+    
     PERSONAS = {
         "luxury_concierge": {
             "description": "Luxury expert focusing on premium quality and exclusivity.",
@@ -150,24 +154,29 @@ class PromptFactory:
             # Fallback to default persona
             persona_data = self.PERSONAS["ecommerce_retail_store_manager"]
 
-        # Load context.json file directly for faster pre-selection
-        try:
-            import os
-            # Get the project root directory (3 levels up from this file)
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            context_file_path = os.path.join(project_root, 'context.json')
-            with open(context_file_path, 'r') as f:
-                full_context = f.read()
-            bt.logging.info(f"Loaded context.json from {context_file_path} with {len(full_context)} characters")
-        except Exception as e:
-            bt.logging.warning(f"Failed to load context.json: {e}, using synapse context")
-            full_context = str(self.context)
+        # Load context.json file with caching (load once, use many times)
+        if not PromptFactory._context_loaded:
+            try:
+                import os
+                # Get the project root directory (3 levels up from this file)
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                context_file_path = os.path.join(project_root, 'context.json')
+                with open(context_file_path, 'r') as f:
+                    PromptFactory._context_cache = f.read()
+                PromptFactory._context_loaded = True
+                bt.logging.info(f"📁 CACHED context.json from {context_file_path} with {len(PromptFactory._context_cache)} characters")
+            except Exception as e:
+                bt.logging.warning(f"Failed to load context.json: {e}, using synapse context")
+                PromptFactory._context_cache = str(self.context)
+                PromptFactory._context_loaded = True
         
-        context_str = pre_select_context(self.sku, full_context, max_products=11, num_recs=self.num_recs)
+        full_context = PromptFactory._context_cache
+        
+        context_str = pre_select_context(self.sku, full_context, max_products=5, num_recs=self.num_recs)
         
         # Simplified persona - only essential info
         try:
-            persona_priorities = ', '.join(persona_data['priorities'][:2])  # Top 2 priorities only
+            persona_priorities = ', '.join(persona_data['priorities'])  # Top 2 priorities only
         except (KeyError, IndexError, TypeError) as e:
             bt.logging.error(f"Error extracting persona priorities: {e}")
             persona_priorities = "quality, value, customer satisfaction"  # Fallback priorities
@@ -175,42 +184,35 @@ class PromptFactory:
         # Minimal cart context (only if essential)
         cart_context = ""
         if hasattr(self, 'cart') and self.cart and len(self.cart) > 0:
-            cart_items = [item.get('sku', '') for item in self.cart[:2]]  # First 2 items only
+            cart_items = [item.get('sku', '') for item in self.cart]  # First 2 items only
             if cart_items:
                 cart_context = f"\nCart: {', '.join(cart_items)}"
         
-        # Ultra-compact prompt for maximum speed (1-3 seconds)
+        # Enhanced prompt for rich, detailed explanations
         prompt = f"""
-            Recommend {self.num_recs} products for {self.sku} ({season}).  
-            Style: {persona_data['description']}  
-            Values: {persona_priorities}{cart_context}  
-            Products: {context_str}  
+            You are a recommender system.
+            Input:
+            - target_sku: {self.sku}
+            - season: {season}
+            - persona: {persona_data['description']}
+            - priorities: {persona_priorities}
+            - cart: {cart_context}
+            - context_products: {context_str}
 
-            Critical Rules:  
-            - Return only a JSON array, no extra text.  
-            - Exactly {self.num_recs} items, no {self.sku}, no duplicates, from context only.  
-            - Exclude products already in cart.  
-            - Match gender of SKU (neutral → neutral), never mix genders.  
-            - Keep pet and baby products separate.  
-            - Stay within the same product category as the input SKU.
-            - Rank by relevance/profitability.  
+            Output Rules:
+            - Return ONLY a JSON array.
+            - Exactly {self.num_recs} items.
+            - No duplicates.
+            - Keep pet and baby products separate.
 
-            Reason Guidelines:  
-            - Each item must have: "sku", "name", "price", "reason".  
-            - Reason = one short plain sentence, no punctuation/line breaks.  
-            - Vary reasoning styles (Perfect/Ideal/Great choice/etc.).  
-            - Explain specific use case or complementarity. 
+            Reason Guidelines:
+            - Reason = detailed explanation (around 10 words) with specific context.
+            - Include specific use cases and lifestyle scenarios.
+            - Vary reasoning styles (Perfect/Ideal/Great choice/etc.).
 
-            Format:  
-            [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Why it fits"}}]
+            Format:
+            [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Detailed explanation with use case/lifestyle scenario. Vary phrasingof why this product fits perfectly"}}]
         """
-
-        prompt_length = len(prompt)
-        bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
-        
-        # Always calculate and log token count for monitoring
-        token_count = PromptFactory.get_token_count(prompt)
-        bt.logging.info(f"LLM QUERY Prompt Token count: {token_count}")
         
         if self.debug:
             bt.logging.debug(f"Persona: {self.persona}, Season: {season}, Values: {persona_priorities}")

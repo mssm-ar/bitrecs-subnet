@@ -154,11 +154,10 @@ class PromptFactory:
         context_str = str(self.context)
         if len(context_str) > 600:  # Reduced from 800 for faster processing
             context_str = context_str[:600] + "..."
-        # context_str = pre_select_context(self.sku, str(self.context), max_products=14, num_recs=self.num_recs)
         
         # Simplified persona - only essential info
         try:
-            persona_priorities = ', '.join(persona_data['priorities'][:2])  # Top 2 priorities only
+            persona_priorities = ', '.join(persona_data['priorities'])  
         except (KeyError, IndexError, TypeError) as e:
             bt.logging.error(f"Error extracting persona priorities: {e}")
             persona_priorities = "quality, value, customer satisfaction"  # Fallback priorities
@@ -166,34 +165,38 @@ class PromptFactory:
         # Minimal cart context (only if essential)
         cart_context = ""
         if hasattr(self, 'cart') and self.cart and len(self.cart) > 0:
-            cart_items = [item.get('sku', '') for item in self.cart[:2]]  # First 2 items only
+            cart_items = [item.get('sku', '') for item in self.cart] 
             if cart_items:
                 cart_context = f"\nCart: {', '.join(cart_items)}"
         
         # Ultra-compact prompt for maximum speed (1-3 seconds)
         prompt = f"""
-            Recommend {self.num_recs} products for {self.sku} ({season}).  
-            Style: {persona_data['description']}  
-            Values: {persona_priorities}{cart_context}  
-            Products: {context_str}  
+            You are a recommender system.
+            Input:
+            - target_sku: {self.sku}
+            - season: {season}
+            - persona: {persona_data['description']}
+            - priorities: {persona_priorities}
+            - cart: {cart_context}
+            - context_products: {context_str}
 
-            Critical Rules:  
-            - Return only a JSON array, no extra text.  
-            - Exactly {self.num_recs} items, no {self.sku}, no duplicates, from context only.  
-            - Exclude products already in cart.  
-            - Match gender of SKU (neutral → neutral), never mix genders.  
-            - Keep pet and baby products separate.  
-            - Stay within the same product category as the input SKU.
-            - Rank by relevance/profitability.  
+            Output Rules:
+            - Return ONLY a JSON array.
+            - Exactly {self.num_recs} items.
+            - Items must come from context_products only.
+            - Exclude target_sku and items already in cart.
+            - No duplicates.
+            - Respect gender (neutral → neutral).
+            - Keep pet and baby products separate.
 
-            Reason Guidelines:  
-            - Each item must have: "sku", "name", "price", "reason".  
-            - Reason = one short plain sentence, no punctuation/line breaks.  
-            - Vary reasoning styles (Perfect/Ideal/Great choice/etc.).  
-            - Explain specific use case or complementarity. 
+            Reason Guidelines:
+            - Each item must have: "sku", "name", "price", "reason".
+            - Reason = detailed explanation (around 10 words) with specific context.
+            - Include specific use cases and lifestyle scenarios.
+            - Vary reasoning styles (Perfect/Ideal/Great choice/etc.).
 
-            Format:  
-            [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Why it fits"}}]
+            Format:
+            [{{"sku": "ABC", "name": "Product Name - Category | Subcategory", "price": "99", "reason": "Detailed explanation with use case/lifestyle scenario. Vary phrasingof why this product fits perfectly"}}]
         """
 
         prompt_length = len(prompt)
@@ -257,8 +260,8 @@ class PromptFactory:
             return []
         
         # Log the raw response for debugging
-        bt.logging.info(f"Raw LLM response length: {len(input_str)}")
-        bt.logging.debug(f"Raw LLM response: {input_str[:500]}...")
+        # bt.logging.info(f"Raw LLM response length: {len(input_str)}")
+        # bt.logging.debug(f"Raw LLM response: {input_str[:500]}...")
         
         # Enhanced cleanup - remove common LLM artifacts
         cleaned_input = input_str.replace("```json", "").replace("```", "").strip()
