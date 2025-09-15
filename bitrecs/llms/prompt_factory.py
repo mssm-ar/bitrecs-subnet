@@ -154,6 +154,7 @@ class PromptFactory:
         context_str = str(self.context)
         if len(context_str) > 600:  # Reduced from 800 for faster processing
             context_str = context_str[:600] + "..."
+        # context_str = pre_select_context(self.sku, str(self.context), max_products=14, num_recs=self.num_recs)
         
         # Simplified persona - only essential info
         try:

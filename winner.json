@@ -2,8 +2,8 @@ SKU:WSH04
 
 Batch ID:
 eab61c6937b826800689b0dba159f7ef
-Created:
-9/12/2025, 12:41:02 PM
+Created: 9/12/2025,
+12: 41: 02 PM
 
 ['{
         "sku": "MJ07",
@@ -30,5 +30,35 @@ Created:
         "name": "Orestes Yoga Pant - Clothing|Erin Recommends|Pants",
         "price": "66",
         "reason": "These yoga pants offer exceptional comfort and a streamlined silhouette ideal for a relaxed yet stylish athleisure ensemble"
+    }'
+]
+
+SKU:MJ04
+
+['{
+        "sku": "WP11",
+        "name": "Sylvia Capri - Clothing|Pants",
+        "price": "42",
+        "reason": "Pairing performance fabric pants with the jacket creates a coordinated activewear look for outdoor adventures"
+    }', '{
+        "sku": "WJ12",
+        "name": "Olivia 14 Zip Light Jacket - Clothing|Jackets|Performance Fabrics|Women Sale",
+        "price": "77",
+        "reason": "This lightweight jacket complements the eco friendly jacket for versatile spring summer layering"
+    }', '{
+        "sku": "WH12",
+        "name": "Circe Hooded Ice Fleece - Clothing|Hoodies  Sweatshirts|Performance Fabrics",
+        "price": "68",
+        "reason": "A performance fleece hoodie provides cozy warmth for cool spring and summer evenings outdoors"
+    }', '{
+        "sku": "MSH11",
+        "name": "Arcadio Gym Short - Shorts",
+        "price": "20",
+        "reason": "Lightweight gym shorts are ideal for active customers seeking eco friendly options during outdoor workouts"
+    }', '{
+        "sku": "MSH10",
+        "name": "Sol Active Short - Clothing|New Luma Yoga Collection|Shorts",
+        "price": "32",
+        "reason": "Active shorts pair perfectly with eco friendly jackets for outdoor fitness and leisure activities"
     }'
 ]
