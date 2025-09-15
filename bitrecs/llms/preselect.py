@@ -74,7 +74,7 @@ class ContextPreSelector:
         """
         try:
             # Check cache first
-            cache_key = f"{query_sku}_{hash(full_context[:100])}_{max_products}"
+            cache_key = f"{query_sku}_{hash(full_context)}_{max_products}"
             if self._is_cached(cache_key):
                 bt.logging.info(f"🎯 CACHE HIT: Using pre-selected context for {query_sku}")
                 return self.cache[cache_key]
@@ -259,7 +259,7 @@ class ContextPreSelector:
             return 'luxury'
     
     def _collect_union_groups(self, products: List[Dict], query_features: ProductFeatures, query_sku: str) -> List[Dict]:
-        """Collect products from all relevant groups using UNION logic"""
+        """Collect products from all relevant groups using UNION logic with gender diversity"""
         union_pool = set()
         
         for product in products:
@@ -268,33 +268,41 @@ class ContextPreSelector:
                 
             candidate_features = self._extract_product_features(product)
             
-            # Group 1: Exact category match
+            # Group 1: Exact category match (highest priority)
             if candidate_features.category == query_features.category:
                 union_pool.add(json.dumps(product))
             
-            # Group 2: Same gender
+            # Group 2: Same gender (high priority)
             if candidate_features.gender == query_features.gender:
                 union_pool.add(json.dumps(product))
             
-            # Group 3: Same technology/brand
+            # Group 3: Unisex products (medium priority - adds diversity)
+            if candidate_features.gender == Gender.UNISEX:
+                union_pool.add(json.dumps(product))
+            
+            # Group 4: Cross-gender for certain categories (low priority - adds variety)
+            if self._should_include_cross_gender(query_features, candidate_features):
+                union_pool.add(json.dumps(product))
+            
+            # Group 5: Same technology/brand
             if (candidate_features.brand_collection == query_features.brand_collection and 
                 candidate_features.brand_collection != 'standard'):
                 union_pool.add(json.dumps(product))
             
-            # Group 4: Same sale status
+            # Group 6: Same sale status
             if candidate_features.sale_item == query_features.sale_item:
                 union_pool.add(json.dumps(product))
             
-            # Group 5: Same price range (±30%)
+            # Group 7: Same price range (±30%)
             if self._price_similarity(query_features.price, candidate_features.price) > 0.7:
                 union_pool.add(json.dumps(product))
             
-            # Group 6: Same activity
+            # Group 8: Same activity
             if (candidate_features.activity and query_features.activity and 
                 candidate_features.activity == query_features.activity):
                 union_pool.add(json.dumps(product))
             
-            # Group 7: Complementary categories
+            # Group 9: Complementary categories
             if self._is_complementary_category(query_features.category, candidate_features.category):
                 union_pool.add(json.dumps(product))
         
@@ -313,6 +321,29 @@ class ContextPreSelector:
         ]
         return (cat1, cat2) in complementary_pairs or (cat2, cat1) in complementary_pairs
     
+    def _should_include_cross_gender(self, query_features: ProductFeatures, candidate_features: ProductFeatures) -> bool:
+        """Determine if cross-gender products should be included for variety"""
+        # For certain categories, include cross-gender products for variety
+        cross_gender_categories = [
+            Category.GEAR,  # Accessories, bags, etc.
+            Category.BAGS,
+            Category.WATCHES,
+            Category.FITNESS_EQUIPMENT
+        ]
+        
+        # Include cross-gender if:
+        # 1. Category is gender-neutral (gear, bags, watches, fitness equipment)
+        # 2. OR same category but different gender (adds variety)
+        if candidate_features.category in cross_gender_categories:
+            return True
+        
+        # For clothing categories, include some cross-gender for variety
+        if (query_features.category == candidate_features.category and 
+            query_features.gender != candidate_features.gender):
+            return True
+            
+        return False
+    
     def _score_for_consensus(self, products: List[Dict], query_features: ProductFeatures, query_sku: str) -> List[Tuple[Dict, float]]:
         """Score products for consensus optimization"""
         scored_products = []
@@ -328,14 +359,18 @@ class ContextPreSelector:
     
     def _calculate_consensus_score(self, query_features: ProductFeatures, candidate_features: ProductFeatures) -> float:
         """
-        Calculate score optimized for consensus participation.
+        Calculate score optimized for consensus participation with gender diversity.
         Balances relevance with diversity for better consensus alignment.
         """
         score = 0.0
         
         # Primary weights (from prompt analysis)
         if query_features.gender == candidate_features.gender:
-            score += 0.45  # Gender match (highest priority)
+            score += 0.40  # Same gender (highest priority)
+        elif candidate_features.gender == Gender.UNISEX:
+            score += 0.25  # Unisex products (good diversity)
+        elif self._should_include_cross_gender(query_features, candidate_features):
+            score += 0.15  # Cross-gender for variety (lower priority)
         
         if query_features.category == candidate_features.category:
             score += 0.30  # Category match
@@ -390,35 +425,57 @@ class ContextPreSelector:
             return 0.2
     
     def _balanced_selection(self, scored_products: List[Tuple[Dict, float]], max_products: int) -> List[Dict]:
-        """Balanced selection for consensus optimization"""
+        """Balanced selection with gender diversity for consensus optimization"""
         if not scored_products:
             return []
         
-        # Tier 1: High relevance (60% of selection)
-        tier1_count = int(max_products * 0.6)
-        tier1_products = [p[0] for p in scored_products[:tier1_count]]
+        # Separate products by gender for balanced selection
+        same_gender = []
+        unisex_products = []
+        cross_gender = []
         
-        # Tier 2: Medium relevance (30% of selection)
-        tier2_count = int(max_products * 0.3)
-        tier2_start = tier1_count
-        tier2_end = tier2_start + tier2_count
-        tier2_products = [p[0] for p in scored_products[tier2_start:tier2_end]]
+        for product, score in scored_products:
+            sku = product.get('sku', '')
+            if sku.startswith('24-'):  # Unisex
+                unisex_products.append((product, score))
+            elif score >= 0.4:  # High relevance (likely same gender)
+                same_gender.append((product, score))
+            else:  # Lower relevance (likely cross-gender)
+                cross_gender.append((product, score))
         
-        # Tier 3: Diversity (10% of selection)
-        tier3_count = max_products - tier1_count - tier2_count
-        tier3_products = [p[0] for p in scored_products[tier2_end:tier2_end + tier3_count]]
-        
-        # Combine and ensure no duplicates
+        # Balanced selection with diversity
         selected = []
         seen_skus = set()
         
-        for product in tier1_products + tier2_products + tier3_products:
+        # 60% same gender (high relevance)
+        same_gender_count = int(max_products * 0.6)
+        for product, score in same_gender[:same_gender_count]:
+            if len(selected) >= max_products:
+                break
             sku = product.get('sku', '')
             if sku and sku not in seen_skus:
                 selected.append(product)
                 seen_skus.add(sku)
-                if len(selected) >= max_products:
-                    break
+        
+        # 25% unisex products (diversity)
+        unisex_count = int(max_products * 0.25)
+        for product, score in unisex_products[:unisex_count]:
+            if len(selected) >= max_products:
+                break
+            sku = product.get('sku', '')
+            if sku and sku not in seen_skus:
+                selected.append(product)
+                seen_skus.add(sku)
+        
+        # 15% cross-gender (variety)
+        cross_gender_count = max_products - len(selected)
+        for product, score in cross_gender[:cross_gender_count]:
+            if len(selected) >= max_products:
+                break
+            sku = product.get('sku', '')
+            if sku and sku not in seen_skus:
+                selected.append(product)
+                seen_skus.add(sku)
         
         return selected
     
