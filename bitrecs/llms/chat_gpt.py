@@ -31,7 +31,7 @@ class ChatGPT:
                 "content": prompt,
             }],
             temperature=0.0,  # Zero for fastest response
-            max_tokens=300,  # Further reduced for faster generation
+            max_tokens=400,  # Further reduced for faster generation
             timeout=5.0,  # Reduced timeout for 1-3 second target
             stream=False,  # Disable streaming for faster completion
             top_p=0.1,  # Reduced for more focused responses
