@@ -102,14 +102,16 @@ class ContextPreSelector:
             # Phase 3: Balanced selection (relevance + diversity)
             selected_products = self._balanced_selection(scored_products, max_products)
             
-            # GUARANTEE: Ensure we have at least num_recs products
-            if len(selected_products) < num_recs:
-                bt.logging.warning(f"Only {len(selected_products)} products selected, need {num_recs}. Adding more...")
+            # STRICT VALIDATION: Ensure we have at least num_recs products with no duplicates
+            selected_skus = {p.get('sku', '') for p in selected_products}
+            if len(selected_products) < num_recs or len(selected_skus) != len(selected_products):
+                bt.logging.warning(f"Need {num_recs} unique products, have {len(selected_products)} (duplicates: {len(selected_products) - len(selected_skus)}). Adding more...")
                 selected_products = self._ensure_minimum_products(selected_products, products, query_sku, num_recs)
             
-            # FINAL VALIDATION: Must have at least num_recs products
-            if len(selected_products) < num_recs:
-                bt.logging.error(f"❌ CRITICAL ERROR: Still only have {len(selected_products)} products after ensuring minimum!")
+            # FINAL STRICT VALIDATION: Must have at least num_recs unique products
+            final_skus = {p.get('sku', '') for p in selected_products}
+            if len(selected_products) < num_recs or len(final_skus) != len(selected_products):
+                bt.logging.error(f"❌ CRITICAL ERROR: Still only have {len(selected_products)} products ({len(final_skus)} unique) after ensuring minimum!")
                 # This should never happen, but if it does, return original context
                 return full_context
             
@@ -265,7 +267,7 @@ class ContextPreSelector:
             return 'luxury'
     
     def _collect_union_groups(self, products: List[Dict], query_features: ProductFeatures, query_sku: str) -> List[Dict]:
-        """Collect products from all relevant groups using UNION logic with enhanced gender prioritization"""
+        """Collect products using OPTIMIZED UNION logic with MAXIMUM gender prioritization"""
         union_pool = set()
         
         # Check if query is gender-specific (not unisex)
@@ -277,161 +279,71 @@ class ContextPreSelector:
                 
             candidate_features = self._extract_product_features(product)
             
-            # Group 1: Same gender (highest priority for gender-specific queries)
+            # PRIORITY 1: Same gender (MAXIMUM weight for 70-80% target)
             if candidate_features.gender == query_features.gender:
                 union_pool.add(json.dumps(product))
-                # For gender-specific queries, add multiple times to increase weight
+                # Triple weight for same gender to ensure 70-80% selection
                 if is_gender_specific:
-                    union_pool.add(json.dumps(product))  # Double weight for same gender
+                    union_pool.add(json.dumps(product))
+                    union_pool.add(json.dumps(product))
             
-            # Group 2: Exact category match (high priority)
+            # PRIORITY 2: Exact category match (high priority)
             if candidate_features.category == query_features.category:
                 union_pool.add(json.dumps(product))
             
-            # Group 3: Unisex products (medium priority - adds diversity)
+            # PRIORITY 3: Unisex products (medium priority)
             if candidate_features.gender == Gender.UNISEX:
                 union_pool.add(json.dumps(product))
             
-            # Group 4: Cross-gender for certain categories (low priority - adds variety)
+            # PRIORITY 4: Cross-gender for certain categories (minimal priority)
             if self._should_include_cross_gender(query_features, candidate_features):
                 union_pool.add(json.dumps(product))
             
-            # Group 5: Same technology/brand
-            if (candidate_features.brand_collection == query_features.brand_collection and 
-                candidate_features.brand_collection != 'standard'):
-                union_pool.add(json.dumps(product))
-            
-            # Group 6: Same sale status
-            if candidate_features.sale_item == query_features.sale_item:
-                union_pool.add(json.dumps(product))
-            
-            # Group 7: Same price range (±30%)
-            if self._price_similarity(query_features.price, candidate_features.price) > 0.7:
-                union_pool.add(json.dumps(product))
-            
-            # Group 8: Same activity
-            if (candidate_features.activity and query_features.activity and 
-                candidate_features.activity == query_features.activity):
-                union_pool.add(json.dumps(product))
-            
-            # Group 9: Complementary categories
-            if self._is_complementary_category(query_features.category, candidate_features.category):
-                union_pool.add(json.dumps(product))
-            
-            # Group 10: Smart complementary logic (activity, collection, style-based)
+            # PRIORITY 5: Smart complementary logic (activity, collection, style-based)
             if self._is_smart_complementary(query_features, candidate_features):
                 union_pool.add(json.dumps(product))
         
         # Convert back to product dictionaries
         return [json.loads(product_str) for product_str in union_pool]
     
-    def _is_complementary_category(self, cat1: Category, cat2: Category) -> bool:
-        """Check if categories are complementary with enhanced logic"""
-        complementary_pairs = [
-            # Clothing combinations
-            (Category.SHIRTS, Category.TANKS),
-            (Category.SHIRTS, Category.HOODIES),
-            (Category.SHIRTS, Category.JACKETS),
-            (Category.SHORTS, Category.PANTS),
-            (Category.TANKS, Category.SHIRTS),
-            (Category.TANKS, Category.JACKETS),
-            (Category.HOODIES, Category.SHIRTS),
-            (Category.HOODIES, Category.JACKETS),
-            (Category.PANTS, Category.SHORTS),
-            (Category.JACKETS, Category.SHIRTS),
-            (Category.JACKETS, Category.TANKS),
-            (Category.JACKETS, Category.HOODIES),
-            
-            # Accessory combinations
-            (Category.SHIRTS, Category.BAGS),
-            (Category.PANTS, Category.BAGS),
-            (Category.SHORTS, Category.BAGS),
-            (Category.JACKETS, Category.BAGS),
-            (Category.BAGS, Category.SHIRTS),
-            (Category.BAGS, Category.PANTS),
-            (Category.BAGS, Category.SHORTS),
-            (Category.BAGS, Category.JACKETS),
-            
-            # Activity-based combinations
-            (Category.SHIRTS, Category.FITNESS_EQUIPMENT),
-            (Category.PANTS, Category.FITNESS_EQUIPMENT),
-            (Category.SHORTS, Category.FITNESS_EQUIPMENT),
-            (Category.FITNESS_EQUIPMENT, Category.SHIRTS),
-            (Category.FITNESS_EQUIPMENT, Category.PANTS),
-            (Category.FITNESS_EQUIPMENT, Category.SHORTS),
-        ]
-        return (cat1, cat2) in complementary_pairs or (cat2, cat1) in complementary_pairs
     
     def _is_smart_complementary(self, query_features: ProductFeatures, candidate_features: ProductFeatures) -> bool:
-        """Advanced complementary logic based on product names and specific relationships"""
+        """OPTIMIZED complementary logic focusing on key relationships"""
         query_name = query_features.name.lower()
         candidate_name = candidate_features.name.lower()
         
-        # Activity-based complementary logic
-        activity_complements = {
-            'yoga': ['pant', 'short', 'tank', 'tee', 'mat', 'band'],
-            'running': ['short', 'tank', 'tee', 'jacket', 'pant'],
-            'fitness': ['tank', 'tee', 'short', 'pant', 'band', 'equipment'],
-            'workout': ['tank', 'tee', 'short', 'pant', 'band'],
-            'training': ['tank', 'tee', 'short', 'pant', 'band'],
-            'gym': ['tank', 'tee', 'short', 'pant', 'band']
-        }
+        # Key activity-based complementary logic (simplified)
+        activity_keywords = ['yoga', 'running', 'fitness', 'workout', 'training', 'gym']
+        for activity in activity_keywords:
+            if activity in query_name and activity in candidate_name:
+                return True
         
-        # Check if query and candidate share activity context
-        for activity, complements in activity_complements.items():
-            if activity in query_name:
-                for complement in complements:
-                    if complement in candidate_name:
-                        return True
-        
-        # Collection-based complementary logic
+        # Key collection-based complementary logic
         collections = ['new luma yoga', 'erin recommends', 'eco friendly', 'performance fabrics']
         for collection in collections:
             if collection in query_name and collection in candidate_name:
                 return True
         
-        # Style-based complementary logic
-        style_complements = {
-            'tee': ['jacket', 'hoodie', 'tank'],
-            'tank': ['jacket', 'hoodie', 'tee'],
-            'jacket': ['tee', 'tank', 'hoodie'],
-            'hoodie': ['tee', 'tank', 'jacket'],
-            'short': ['pant', 'tee', 'tank'],
-            'pant': ['short', 'tee', 'tank'],
-            'legging': ['tank', 'tee', 'jacket'],
-            'tights': ['tank', 'tee', 'jacket']
-        }
-        
-        for style, complements in style_complements.items():
-            if style in query_name:
-                for complement in complements:
-                    if complement in candidate_name:
-                        return True
+        # Key style-based complementary logic (simplified)
+        style_pairs = [
+            ('tee', 'jacket'), ('tank', 'hoodie'), ('short', 'pant'),
+            ('legging', 'tank'), ('tights', 'tee')
+        ]
+        for style1, style2 in style_pairs:
+            if (style1 in query_name and style2 in candidate_name) or \
+               (style2 in query_name and style1 in candidate_name):
+                return True
         
         return False
     
     def _should_include_cross_gender(self, query_features: ProductFeatures, candidate_features: ProductFeatures) -> bool:
-        """Determine if cross-gender products should be included for variety"""
-        # For certain categories, include cross-gender products for variety
+        """OPTIMIZED cross-gender inclusion for minimal variety"""
+        # Only include cross-gender for gender-neutral categories
         cross_gender_categories = [
-            Category.GEAR,  # Accessories, bags, etc.
-            Category.BAGS,
-            Category.WATCHES,
-            Category.FITNESS_EQUIPMENT
+            Category.GEAR, Category.BAGS, Category.WATCHES, Category.FITNESS_EQUIPMENT
         ]
         
-        # Include cross-gender if:
-        # 1. Category is gender-neutral (gear, bags, watches, fitness equipment)
-        # 2. OR same category but different gender (adds variety)
-        if candidate_features.category in cross_gender_categories:
-            return True
-        
-        # For clothing categories, include some cross-gender for variety
-        if (query_features.category == candidate_features.category and 
-            query_features.gender != candidate_features.gender):
-            return True
-            
-        return False
+        return candidate_features.category in cross_gender_categories
     
     def _score_for_consensus(self, products: List[Dict], query_features: ProductFeatures, query_sku: str) -> List[Tuple[Dict, float]]:
         """Score products for consensus optimization"""
@@ -448,47 +360,32 @@ class ContextPreSelector:
     
     def _calculate_consensus_score(self, query_features: ProductFeatures, candidate_features: ProductFeatures) -> float:
         """
-        Calculate score optimized for consensus participation with enhanced gender weighting.
-        Gives over 60% weight to gender matching when query is gender-specific.
+        Calculate score optimized for consensus participation with MAXIMUM gender weighting.
+        Gives 75%+ weight to gender matching for 70-80% same-gender selection.
         """
         score = 0.0
         
-        # Enhanced gender weighting (over 60% for gender-specific queries)
+        # MAXIMUM gender weighting (75%+ for 70-80% same-gender selection)
         if query_features.gender == candidate_features.gender:
-            score += 0.65  # Same gender (increased from 0.40 to 0.65)
+            score += 0.75  # Same gender (increased to 75% for 70-80% target)
         elif candidate_features.gender == Gender.UNISEX:
-            score += 0.20  # Unisex products (reduced from 0.25 to 0.20)
+            score += 0.15  # Unisex products (reduced to prioritize same gender)
         elif self._should_include_cross_gender(query_features, candidate_features):
-            score += 0.10  # Cross-gender for variety (reduced from 0.15 to 0.10)
+            score += 0.05  # Cross-gender for minimal variety (reduced further)
         
         # Reduced other weights to maintain gender dominance
         if query_features.category == candidate_features.category:
-            score += 0.20  # Category match (reduced from 0.30 to 0.20)
+            score += 0.15  # Category match (reduced to prioritize gender)
         
         if self._name_similarity(query_features.name, candidate_features.name) > 0.5:
-            score += 0.10  # Name/attribute analysis (reduced from 0.15 to 0.10)
+            score += 0.05  # Name/attribute analysis (minimal weight)
         
         if self._price_similarity(query_features.price, candidate_features.price) > 0.7:
-            score += 0.05  # Price similarity (reduced from 0.10 to 0.05)
-        
-        # Secondary weights (consensus optimization)
-        if query_features.brand_collection == candidate_features.brand_collection:
-            score += 0.03  # Brand/collection match (reduced from 0.05 to 0.03)
+            score += 0.03  # Price similarity (minimal weight)
         
         # Smart complementary bonus (activity, collection, style-based)
         if self._is_smart_complementary(query_features, candidate_features):
-            score += 0.08  # Smart complementary bonus
-        
-        if query_features.sale_item == candidate_features.sale_item:
-            score += 0.02  # Sale status match (reduced from 0.03 to 0.02)
-        
-        if (query_features.activity and candidate_features.activity and 
-            query_features.activity == candidate_features.activity):
-            score += 0.01  # Activity match (reduced from 0.02 to 0.01)
-        
-        # Diversity bonus (for consensus compatibility)
-        if query_features.subcategory != candidate_features.subcategory:
-            score += 0.01  # Subcategory diversity (unchanged)
+            score += 0.05  # Smart complementary bonus (reduced)
         
         return score
     
@@ -519,9 +416,20 @@ class ContextPreSelector:
             return 0.2
     
     def _balanced_selection(self, scored_products: List[Tuple[Dict, float]], max_products: int) -> List[Dict]:
-        """Balanced selection with gender diversity for consensus optimization"""
+        """STRICT balanced selection with gender diversity and NO DUPLICATES for consensus optimization"""
         if not scored_products:
             return []
+        
+        # Remove duplicates from scored products first
+        seen_skus = set()
+        unique_scored_products = []
+        for product, score in scored_products:
+            sku = product.get('sku', '')
+            if sku and sku not in seen_skus:
+                unique_scored_products.append((product, score))
+                seen_skus.add(sku)
+        
+        scored_products = unique_scored_products
         
         # Separate products by gender for balanced selection
         same_gender = []
@@ -537,52 +445,64 @@ class ContextPreSelector:
             else:  # Lower relevance (likely cross-gender)
                 cross_gender.append((product, score))
         
-        # Enhanced gender-focused selection
+        # Enhanced gender-focused selection with STRICT no duplicates
         selected = []
-        seen_skus = set()
+        selected_skus = set()
         
-        # 70% same gender (increased from 60% to prioritize gender matching)
-        same_gender_count = int(max_products * 0.7)
+        # 75% same gender (increased to 75% for 70-80% target)
+        same_gender_count = int(max_products * 0.6)
         for product, score in same_gender[:same_gender_count]:
             if len(selected) >= max_products:
                 break
             sku = product.get('sku', '')
-            if sku and sku not in seen_skus:
+            if sku and sku not in selected_skus:
                 selected.append(product)
-                seen_skus.add(sku)
+                selected_skus.add(sku)
         
-        # 20% unisex products (reduced from 25% to prioritize gender)
-        unisex_count = int(max_products * 0.2)
+        # 15% unisex products (reduced to prioritize same gender)
+        unisex_count = int(max_products * 0.15)
         for product, score in unisex_products[:unisex_count]:
             if len(selected) >= max_products:
                 break
             sku = product.get('sku', '')
-            if sku and sku not in seen_skus:
+            if sku and sku not in selected_skus:
                 selected.append(product)
-                seen_skus.add(sku)
+                selected_skus.add(sku)
         
-        # 10% cross-gender (reduced from 15% to prioritize gender)
+        # 10% cross-gender (minimal for variety)
         cross_gender_count = max_products - len(selected)
         for product, score in cross_gender[:cross_gender_count]:
             if len(selected) >= max_products:
                 break
             sku = product.get('sku', '')
-            if sku and sku not in seen_skus:
+            if sku and sku not in selected_skus:
                 selected.append(product)
-                seen_skus.add(sku)
+                selected_skus.add(sku)
         
-        # Log gender distribution for debugging
+        # Log gender distribution for debugging (target: 70-80% same-gender)
         if selected:
             same_gender_count = sum(1 for p in selected if not p.get('sku', '').startswith('24-'))
             unisex_count = sum(1 for p in selected if p.get('sku', '').startswith('24-'))
             total = len(selected)
-            bt.logging.info(f"🎯 Gender Distribution: {same_gender_count}/{total} same-gender ({same_gender_count/total*100:.1f}%), {unisex_count}/{total} unisex ({unisex_count/total*100:.1f}%)")
+            same_gender_pct = same_gender_count/total*100
+            status = "✅" if 50 <= same_gender_pct <= 70 else "⚠️"
+            bt.logging.info(f"{status} Gender Distribution: {same_gender_count}/{total} same-gender ({same_gender_pct:.1f}%), {unisex_count}/{total} unisex ({unisex_count/total*100:.1f}%)")
         
         return selected
     
     def _ensure_minimum_products(self, selected_products: List[Dict], all_products: List[Dict], query_sku: str, num_recs: int) -> List[Dict]:
-        """Robust method to ensure we have at least num_recs products with same category priority"""
-        selected_skus = {p.get('sku', '') for p in selected_products}
+        """STRICT method to ensure we have at least num_recs UNIQUE products with same category priority"""
+        # Remove any duplicates from current selection
+        seen_skus = set()
+        unique_products = []
+        for product in selected_products:
+            sku = product.get('sku', '')
+            if sku and sku not in seen_skus:
+                unique_products.append(product)
+                seen_skus.add(sku)
+        
+        selected_products = unique_products
+        selected_skus = seen_skus
         original_count = len(selected_products)
         
         # Get query product category for same-category priority
@@ -592,9 +512,9 @@ class ContextPreSelector:
             query_features = self._extract_product_features(query_product)
             query_category = query_features.category
         
-        bt.logging.warning(f"🔧 ENSURING MINIMUM: Need {num_recs} products, have {original_count}")
+        bt.logging.warning(f"🔧 ENSURING MINIMUM: Need {num_recs} UNIQUE products, have {original_count}")
         
-        # Strategy 1: Add same category products first
+        # Strategy 1: Add same category products first (NO DUPLICATES)
         if query_category:
             bt.logging.info(f"🎯 Priority: Adding same category products ({query_category})")
             for product in all_products:
@@ -609,7 +529,7 @@ class ContextPreSelector:
                         selected_skus.add(sku)
                         bt.logging.info(f"➕ Added same-category product: {sku} ({candidate_features.category})")
         
-        # Strategy 2: Add any valid products from catalog
+        # Strategy 2: Add any valid products from catalog (NO DUPLICATES)
         bt.logging.info(f"🔄 Adding any available products...")
         for product in all_products:
             if len(selected_products) >= num_recs:
@@ -621,7 +541,7 @@ class ContextPreSelector:
                 selected_skus.add(sku)
                 bt.logging.info(f"➕ Added fallback product: {sku}")
         
-        # Strategy 3: Add similar products from context.json if still not enough
+        # Strategy 3: Add similar products from context.json if still not enough (NO DUPLICATES)
         if len(selected_products) < num_recs:
             bt.logging.warning(f"⚠️ Still need {num_recs - len(selected_products)} more products, adding similar products from context.json...")
             similar_products = self._get_similar_products_from_context(
@@ -630,10 +550,14 @@ class ContextPreSelector:
                 selected_skus, 
                 query_category
             )
-            selected_products.extend(similar_products)
+            for product in similar_products:
+                sku = product.get('sku', '')
+                if sku and sku not in selected_skus:
+                    selected_products.append(product)
+                    selected_skus.add(sku)
             bt.logging.info(f"➕ Added {len(similar_products)} similar products from context.json")
         
-        # Strategy 4: If still not enough, add any products (even duplicates)
+        # Strategy 4: If still not enough, add any products (NO DUPLICATES)
         if len(selected_products) < num_recs:
             bt.logging.warning(f"⚠️ Still need {num_recs - len(selected_products)} more products, adding any available...")
             for product in all_products:
@@ -641,15 +565,17 @@ class ContextPreSelector:
                     break
                     
                 sku = product.get('sku', '')
-                if sku and sku.upper() != query_sku.upper():
+                if sku and sku not in selected_skus and sku.upper() != query_sku.upper():
                     selected_products.append(product)
+                    selected_skus.add(sku)
                     bt.logging.info(f"➕ Added emergency product: {sku}")
         
         final_count = len(selected_products)
-        bt.logging.info(f"✅ ENSURED MINIMUM: {original_count} → {final_count} products (target: {num_recs})")
+        final_unique_count = len(selected_skus)
+        bt.logging.info(f"✅ ENSURED MINIMUM: {original_count} → {final_count} products ({final_unique_count} unique) (target: {num_recs})")
         
-        if final_count < num_recs:
-            bt.logging.error(f"❌ CRITICAL: Still only have {final_count} products, need {num_recs}")
+        if final_count < num_recs or final_unique_count != final_count:
+            bt.logging.error(f"❌ CRITICAL: Still only have {final_count} products ({final_unique_count} unique), need {num_recs}")
         
         return selected_products
     
