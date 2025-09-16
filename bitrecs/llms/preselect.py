@@ -107,6 +107,26 @@ class ContextPreSelector:
                 bt.logging.warning(f"Only {len(selected_products)} products selected, need {num_recs}. Adding more...")
                 selected_products = self._ensure_minimum_products(selected_products, products, query_sku, num_recs)
             
+            # FINAL VALIDATION: Must have at least num_recs products
+            if len(selected_products) < num_recs:
+                bt.logging.error(f"❌ CRITICAL ERROR: Still only have {len(selected_products)} products after ensuring minimum!")
+                # Emergency fallback: add any products from the full catalog
+                bt.logging.warning(f"🚨 EMERGENCY FALLBACK: Adding any available products...")
+                selected_skus = {p.get('sku', '') for p in selected_products}
+                for product in products:
+                    if len(selected_products) >= num_recs:
+                        break
+                    sku = product.get('sku', '')
+                    if sku and sku not in selected_skus and sku.upper() != query_sku.upper():
+                        selected_products.append(product)
+                        selected_skus.add(sku)
+                        bt.logging.info(f"🚨 Added emergency product: {sku}")
+                
+                # If still not enough, this is a critical error
+                if len(selected_products) < num_recs:
+                    bt.logging.error(f"❌ FATAL ERROR: Cannot find enough products in catalog!")
+                    return full_context
+            
             # Cache result
             result = json.dumps(selected_products)
             self._cache_result(cache_key, result)
@@ -565,6 +585,18 @@ class ContextPreSelector:
                 selected.append(product)
                 seen_skus.add(sku)
         
+        # FALLBACK: If we don't have enough products, add any available products
+        if len(selected) < max_products:
+            bt.logging.warning(f"⚠️ Only {len(selected)} products selected, need {max_products}. Adding fallback products...")
+            for product, score in scored_products:
+                if len(selected) >= max_products:
+                    break
+                sku = product.get('sku', '')
+                if sku and sku not in seen_skus:
+                    selected.append(product)
+                    seen_skus.add(sku)
+                    bt.logging.info(f"➕ Added fallback product: {sku}")
+        
         # Log gender distribution for debugging
         if selected:
             same_gender_count = sum(1 for p in selected if not p.get('sku', '').startswith('24-'))
@@ -575,10 +607,36 @@ class ContextPreSelector:
         return selected
     
     def _ensure_minimum_products(self, selected_products: List[Dict], all_products: List[Dict], query_sku: str, num_recs: int) -> List[Dict]:
-        """Simple method to ensure we have at least num_recs products"""
+        """Robust method to ensure we have at least num_recs products with same category priority"""
         selected_skus = {p.get('sku', '') for p in selected_products}
+        original_count = len(selected_products)
         
-        # Add more products from catalog until we reach num_recs
+        # Get query product category for same-category priority
+        query_product = self._find_product_by_sku(all_products, query_sku)
+        query_category = None
+        if query_product:
+            query_features = self._extract_product_features(query_product)
+            query_category = query_features.category
+        
+        bt.logging.warning(f"🔧 ENSURING MINIMUM: Need {num_recs} products, have {original_count}")
+        
+        # Strategy 1: Add same category products first
+        if query_category:
+            bt.logging.info(f"🎯 Priority: Adding same category products ({query_category})")
+            for product in all_products:
+                if len(selected_products) >= num_recs:
+                    break
+                    
+                sku = product.get('sku', '')
+                if sku and sku not in selected_skus and sku.upper() != query_sku.upper():
+                    candidate_features = self._extract_product_features(product)
+                    if candidate_features.category == query_category:
+                        selected_products.append(product)
+                        selected_skus.add(sku)
+                        bt.logging.info(f"➕ Added same-category product: {sku} ({candidate_features.category})")
+        
+        # Strategy 2: Add any valid products from catalog
+        bt.logging.info(f"🔄 Adding any available products...")
         for product in all_products:
             if len(selected_products) >= num_recs:
                 break
@@ -587,8 +645,26 @@ class ContextPreSelector:
             if sku and sku not in selected_skus and sku.upper() != query_sku.upper():
                 selected_products.append(product)
                 selected_skus.add(sku)
+                bt.logging.info(f"➕ Added fallback product: {sku}")
         
-        bt.logging.info(f"Ensured minimum: {len(selected_products)} products")
+        # Strategy 3: If still not enough, add any products (even duplicates)
+        if len(selected_products) < num_recs:
+            bt.logging.warning(f"⚠️ Still need {num_recs - len(selected_products)} more products, adding any available...")
+            for product in all_products:
+                if len(selected_products) >= num_recs:
+                    break
+                    
+                sku = product.get('sku', '')
+                if sku and sku.upper() != query_sku.upper():
+                    selected_products.append(product)
+                    bt.logging.info(f"➕ Added emergency product: {sku}")
+        
+        final_count = len(selected_products)
+        bt.logging.info(f"✅ ENSURED MINIMUM: {original_count} → {final_count} products (target: {num_recs})")
+        
+        if final_count < num_recs:
+            bt.logging.error(f"❌ CRITICAL: Still only have {final_count} products, need {num_recs}")
+        
         return selected_products
     
     def _is_cached(self, cache_key: str) -> bool:
