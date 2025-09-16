@@ -64,6 +64,9 @@ class LocalMetadata:
 
         except Exception as e:
             commit_hash = "exception unknown"
+            # Log the specific error for debugging
+            import logging
+            logging.getLogger(__name__).debug(f"Version check error: {e}")
 
         return LocalMetadata(
             head=commit_hash,

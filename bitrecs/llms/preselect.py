@@ -110,22 +110,8 @@ class ContextPreSelector:
             # FINAL VALIDATION: Must have at least num_recs products
             if len(selected_products) < num_recs:
                 bt.logging.error(f"❌ CRITICAL ERROR: Still only have {len(selected_products)} products after ensuring minimum!")
-                # Emergency fallback: add any products from the full catalog
-                bt.logging.warning(f"🚨 EMERGENCY FALLBACK: Adding any available products...")
-                selected_skus = {p.get('sku', '') for p in selected_products}
-                for product in products:
-                    if len(selected_products) >= num_recs:
-                        break
-                    sku = product.get('sku', '')
-                    if sku and sku not in selected_skus and sku.upper() != query_sku.upper():
-                        selected_products.append(product)
-                        selected_skus.add(sku)
-                        bt.logging.info(f"🚨 Added emergency product: {sku}")
-                
-                # If still not enough, this is a critical error
-                if len(selected_products) < num_recs:
-                    bt.logging.error(f"❌ FATAL ERROR: Cannot find enough products in catalog!")
-                    return full_context
+                # This should never happen, but if it does, return original context
+                return full_context
             
             # Cache result
             result = json.dumps(selected_products)
@@ -585,18 +571,6 @@ class ContextPreSelector:
                 selected.append(product)
                 seen_skus.add(sku)
         
-        # FALLBACK: If we don't have enough products, add any available products
-        if len(selected) < max_products:
-            bt.logging.warning(f"⚠️ Only {len(selected)} products selected, need {max_products}. Adding fallback products...")
-            for product, score in scored_products:
-                if len(selected) >= max_products:
-                    break
-                sku = product.get('sku', '')
-                if sku and sku not in seen_skus:
-                    selected.append(product)
-                    seen_skus.add(sku)
-                    bt.logging.info(f"➕ Added fallback product: {sku}")
-        
         # Log gender distribution for debugging
         if selected:
             same_gender_count = sum(1 for p in selected if not p.get('sku', '').startswith('24-'))
@@ -647,7 +621,19 @@ class ContextPreSelector:
                 selected_skus.add(sku)
                 bt.logging.info(f"➕ Added fallback product: {sku}")
         
-        # Strategy 3: If still not enough, add any products (even duplicates)
+        # Strategy 3: Add similar products from context.json if still not enough
+        if len(selected_products) < num_recs:
+            bt.logging.warning(f"⚠️ Still need {num_recs - len(selected_products)} more products, adding similar products from context.json...")
+            similar_products = self._get_similar_products_from_context(
+                num_recs - len(selected_products), 
+                query_sku, 
+                selected_skus, 
+                query_category
+            )
+            selected_products.extend(similar_products)
+            bt.logging.info(f"➕ Added {len(similar_products)} similar products from context.json")
+        
+        # Strategy 4: If still not enough, add any products (even duplicates)
         if len(selected_products) < num_recs:
             bt.logging.warning(f"⚠️ Still need {num_recs - len(selected_products)} more products, adding any available...")
             for product in all_products:
@@ -666,6 +652,95 @@ class ContextPreSelector:
             bt.logging.error(f"❌ CRITICAL: Still only have {final_count} products, need {num_recs}")
         
         return selected_products
+    
+    def _get_similar_products_from_context(self, needed_count: int, query_sku: str, selected_skus: Set[str], query_category: Optional[Category]) -> List[Dict]:
+        """Get similar and related products from context.json to ensure minimum product count"""
+        try:
+            import os
+            # Get the project root directory (3 levels up from this file)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            context_file_path = os.path.join(project_root, 'context.json')
+            
+            with open(context_file_path, 'r') as f:
+                context_products = json.load(f)
+            
+            # Filter out query SKU and already selected SKUs
+            available_products = [
+                product for product in context_products
+                if (product.get('sku', '').upper() != query_sku.upper() and 
+                    product.get('sku', '') not in selected_skus)
+            ]
+            
+            if not available_products:
+                bt.logging.warning("No available products in context.json for similar selection")
+                return []
+            
+            # Score products by similarity to query
+            scored_products = []
+            for product in available_products:
+                score = self._calculate_similarity_score(product, query_sku, query_category)
+                scored_products.append((product, score))
+            
+            # Sort by similarity score (highest first)
+            scored_products.sort(key=lambda x: x[1], reverse=True)
+            
+            # Select the most similar products
+            similar_count = min(needed_count, len(scored_products))
+            similar_products = [product for product, score in scored_products[:similar_count]]
+            
+            bt.logging.info(f"🎯 Selected {len(similar_products)} similar products from context.json")
+            return similar_products
+            
+        except Exception as e:
+            bt.logging.error(f"Failed to get similar products from context.json: {e}")
+            return []
+    
+    def _calculate_similarity_score(self, product: Dict, query_sku: str, query_category: Optional[Category]) -> float:
+        """Calculate similarity score between a product and the query"""
+        try:
+            product_features = self._extract_product_features(product)
+            score = 0.0
+            
+            # High priority: Same category
+            if query_category and product_features.category == query_category:
+                score += 0.4
+            
+            # Medium priority: Same gender (if query is gender-specific)
+            if query_sku.startswith(('W', 'M')) and not product.get('sku', '').startswith('24-'):
+                if query_sku.startswith('W') and product.get('sku', '').startswith('W'):
+                    score += 0.3
+                elif query_sku.startswith('M') and product.get('sku', '').startswith('M'):
+                    score += 0.3
+            
+            # Medium priority: Unisex products (good fallback)
+            if product.get('sku', '').startswith('24-'):
+                score += 0.2
+            
+            # Low priority: Similar price range
+            try:
+                query_price = float(query_sku.split('-')[1]) if '-' in query_sku else 50.0  # Fallback price
+                product_price = float(product.get('price', 0))
+                if product_price > 0:
+                    price_diff = abs(query_price - product_price) / max(query_price, product_price)
+                    if price_diff <= 0.3:  # Within 30%
+                        score += 0.1
+            except:
+                pass
+            
+            # Low priority: Name similarity
+            query_name_words = set(query_sku.lower().split())
+            product_name_words = set(product.get('name', '').lower().split())
+            if query_name_words and product_name_words:
+                intersection = len(query_name_words.intersection(product_name_words))
+                union = len(query_name_words.union(product_name_words))
+                if union > 0:
+                    score += 0.1 * (intersection / union)
+            
+            return score
+            
+        except Exception as e:
+            bt.logging.debug(f"Error calculating similarity score: {e}")
+            return 0.0
     
     def _is_cached(self, cache_key: str) -> bool:
         """Check if result is cached and not expired"""
